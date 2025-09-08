@@ -1,0 +1,27 @@
+# Telegram Bot API
+python-telegram-bot==20.7
+
+# HTTP requests and web scraping
+aiohttp==3.9.1
+requests==2.31.0
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# Environment variables
+python-dotenv==1.0.0
+
+# Async support
+asyncio-throttle==1.0.2
+
+# Data handling
+urllib3==2.1.0
+
+# Logging (built-in, but good to be explicit about versions we tested with)
+# logging - built into Python
+
+# Development dependencies (optional, for testing)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+
+# Optional: for better performance with large HTML parsing
+html5lib==1.1
