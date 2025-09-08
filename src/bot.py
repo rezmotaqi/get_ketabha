@@ -111,7 +111,7 @@ class TelegramLibGenBot:
             await searching_msg.edit_text(f"Found {len(results)} results for: '{query}'\nSending results...")
             
             # Send each book result individually with download links
-            for i, book in enumerate(results[:5], 1):  # Limit to 5 results
+            for i, book in enumerate(results, 1):  # Return ALL results
                 await self.send_individual_book_result(update, book, i)
                 
         except Exception as e:

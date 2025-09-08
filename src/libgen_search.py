@@ -41,7 +41,7 @@ class LibGenSearcher:
         logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors: {', '.join(self.libgen_mirrors)}")
         logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors: {', '.join(self.download_mirrors)}")
         
-    async def search(self, query: str, max_results: int = 25) -> List[Dict[str, Any]]:
+    async def search(self, query: str, max_results: int = 50) -> List[Dict[str, Any]]:
         """
         Search for books across LibGen mirrors.
         
