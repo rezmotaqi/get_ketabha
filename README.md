@@ -157,13 +157,14 @@ You can search in multiple ways:
 
 ### LibGen Mirrors
 
-The bot automatically tries multiple LibGen mirrors:
-- libgen.rs
-- libgen.is  
-- libgen.st
-- libgen.fun
+The bot automatically tries multiple working LibGen mirrors in order:
+- libgen.la (primary)
+- libgen.li
+- libgen.vg
+- libgen.bz
+- libgen.gl
 
-You can customize the mirror list in `src/libgen_search.py`.
+These mirrors are based on real-time analysis of working LibGen sites. You can customize the mirror list in your `.env` file using `LIBGEN_SEARCH_MIRRORS` and `LIBGEN_DOWNLOAD_MIRRORS` variables.
 
 ## Development 🛠️
 
@@ -210,6 +211,16 @@ Key dependencies include:
 4. **Import errors**
    - Make sure all dependencies are installed: `pip install -r requirements.txt`
    - Check Python version (requires 3.8+)
+
+5. **"No download links found"**
+   - The bot now follows LibGen's complete flow (ads.php → file page → get.php)
+   - Some books might not have working download links
+   - Try using the MD5 hash manually on LibGen sites
+
+6. **"404 errors from LibGen"**
+   - LibGen mirrors change frequently - the bot uses current working mirrors
+   - If persistent, check the `LIBGEN_SEARCH_MIRRORS` in your .env file
+   - Update to latest working mirrors: libgen.la, libgen.li, libgen.vg
 
 ### Logging
 
@@ -261,6 +272,15 @@ pre-commit install
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Changelog 📝
+
+### Version 1.1.0 (LibGen Integration Fixes)
+- ✅ **Fixed LibGen search patterns**: Updated to use correct index.php endpoint with proper parameters
+- ✅ **Improved HTML parsing**: Now correctly parses the actual LibGen table structure  
+- ✅ **Enhanced download links**: Follows the complete LibGen flow (search → results → get.php final download)
+- ✅ **Updated working mirrors**: Uses currently active LibGen mirrors (.la, .li, .vg, .bz, .gl)
+- ✅ **Better error handling**: Improved fallback mechanisms for failed requests
+- ✅ **Real download extraction**: Properly extracts get.php links with keys for direct downloads
+- ✅ **Mirror diversity**: Support for RandomBook and Anna's Archive alternative mirrors
 
 ### Version 1.0.0 (Initial Release)
 - Basic search functionality
