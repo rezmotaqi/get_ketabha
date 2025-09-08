@@ -17,6 +17,7 @@ from telegram.ext import (
     filters
 )
 from dotenv import load_dotenv
+from telegram.request import HTTPXRequest
 
 from libgen_search import LibGenSearcher
 from utils.book_formatter import BookFormatter
@@ -106,6 +107,9 @@ class TelegramLibGenBot:
                 )
                 return
                 
+            # Store results in user context for download callbacks
+            context.user_data['last_search_results'] = results[:5]
+            
             # Format and send results
             formatted_results = self.formatter.format_search_results(results[:5])  # Limit to 5 results
             keyboard = self.create_download_keyboard(results[:5])
@@ -139,11 +143,52 @@ class TelegramLibGenBot:
             # Extract book index from callback data
             book_index = int(query.data.split('_')[1])
             
-            # Get download links (this would be implemented based on the last search results)
-            # For now, we'll show a placeholder message
+            # Get the book info from user data (stored during search)
+            if 'last_search_results' not in context.user_data:
+                await query.edit_message_text("❌ Search results expired. Please search again.")
+                return
+                
+            results = context.user_data['last_search_results']
+            if book_index >= len(results):
+                await query.edit_message_text("❌ Invalid book selection. Please search again.")
+                return
+                
+            book = results[book_index]
+            md5_hash = book.get('md5')
+            
+            if not md5_hash:
+                await query.edit_message_text("❌ No MD5 hash found for this book. Cannot get download links.")
+                return
+                
+            # Show getting links message
+            await query.edit_message_text(f"🔗 Getting download links for: {book['title']}...")
+            
+            # Get download links
+            download_links = await self.searcher.get_download_links(md5_hash)
+            
+            if not download_links:
+                await query.edit_message_text(
+                    f"❌ No download links found for: {book['title']}\n\n"
+                    f"You can try searching manually with MD5: `{md5_hash}`",
+                    parse_mode='Markdown'
+                )
+                return
+                
+            # Format download links message
+            links_text = f"📚 **{book['title']}**\n"
+            links_text += f"👤 Author: {book['author']}\n"
+            links_text += f"📅 Year: {book['year']} | 💾 Size: {book['size']} | 📄 Format: {book['extension']}\n\n"
+            links_text += "🔗 **Download Links:**\n"
+            
+            for i, link in enumerate(download_links[:5], 1):  # Limit to 5 links
+                links_text += f"{i}. [{link['name']}]({link['url']})\n"
+                
+            links_text += f"\n🔍 MD5: `{md5_hash}`"
+            
             await query.edit_message_text(
-                "🔗 Getting download links...\n"
-                "This feature will provide direct download links from LibGen mirrors."
+                links_text,
+                parse_mode='Markdown',
+                disable_web_page_preview=True
             )
             
         except Exception as e:
@@ -154,8 +199,17 @@ class TelegramLibGenBot:
         """Start the bot."""
         logger.info("Starting Telegram LibGen Bot...")
         
-        # Create application
-        application = Application.builder().token(self.token).build()
+        # Configure proxy if available
+        http_proxy = os.getenv('HTTP_PROXY')
+        https_proxy = os.getenv('HTTPS_PROXY')
+        
+        if http_proxy or https_proxy:
+            logger.info(f"Using proxy: HTTP={http_proxy}, HTTPS={https_proxy}")
+            proxy_url = https_proxy or http_proxy
+            request = HTTPXRequest(proxy=proxy_url)
+            application = Application.builder().token(self.token).request(request).build()
+        else:
+            application = Application.builder().token(self.token).build()
         
         # Add handlers
         application.add_handler(CommandHandler("start", self.start_command))

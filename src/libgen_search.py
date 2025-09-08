@@ -7,37 +7,39 @@ Handles searching LibGen sites and extracting book information and download link
 import asyncio
 import aiohttp
 import re
+import os
 from typing import List, Dict, Any, Optional
 from urllib.parse import quote, urljoin
 from bs4 import BeautifulSoup
 import logging
+from dotenv import load_dotenv
 
 from utils.logger import setup_logger
+
+# Load environment variables
+load_dotenv()
 
 logger = setup_logger(__name__)
 
 class LibGenSearcher:
     """Main class for searching LibGen sites."""
     
-    # LibGen mirror URLs
-    LIBGEN_MIRRORS = [
-        "http://libgen.rs",
-        "http://libgen.is",
-        "http://libgen.st",
-        "https://libgen.fun",
-    ]
-    
-    # Download mirrors
-    DOWNLOAD_MIRRORS = [
-        "http://library.lol",
-        "http://libgen.rs",
-        "http://libgen.is",
-    ]
-    
-    def __init__(self, timeout: int = 30, max_retries: int = 3):
+    def __init__(self, timeout: int = 30, max_retries: int = 1):
         """Initialize the searcher."""
         self.timeout = timeout
-        self.max_retries = max_retries
+        self.max_retries = max_retries  # Now used per mirror, not total
+        
+        # Load mirrors from environment variables
+        search_mirrors_env = os.getenv('LIBGEN_SEARCH_MIRRORS', 
+                                       'http://libgen.rs,http://libgen.is,https://libgen.la,http://libgen.st,https://libgen.fun')
+        self.libgen_mirrors = [url.strip() for url in search_mirrors_env.split(',') if url.strip()]
+        
+        download_mirrors_env = os.getenv('LIBGEN_DOWNLOAD_MIRRORS', 
+                                         'http://library.lol,http://libgen.rs,http://libgen.is,https://libgen.la')
+        self.download_mirrors = [url.strip() for url in download_mirrors_env.split(',') if url.strip()]
+        
+        logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors: {', '.join(self.libgen_mirrors)}")
+        logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors: {', '.join(self.download_mirrors)}")
         
     async def search(self, query: str, max_results: int = 25) -> List[Dict[str, Any]]:
         """
@@ -54,14 +56,17 @@ class LibGenSearcher:
         
         results = []
         
-        # Try each mirror until we get results
-        for mirror in self.LIBGEN_MIRRORS:
+        # Try each mirror once until we get results
+        for mirror in self.libgen_mirrors:
             try:
+                logger.info(f"Attempting search on mirror: {mirror}")
                 mirror_results = await self._search_mirror(mirror, query, max_results)
                 if mirror_results:
                     results.extend(mirror_results)
                     logger.info(f"Found {len(mirror_results)} results from {mirror}")
                     break
+                else:
+                    logger.info(f"No results from {mirror}, trying next mirror")
                     
             except Exception as e:
                 logger.warning(f"Failed to search {mirror}: {str(e)}")
@@ -74,22 +79,32 @@ class LibGenSearcher:
         return unique_results[:max_results]
         
     async def _search_mirror(self, mirror: str, query: str, max_results: int) -> List[Dict[str, Any]]:
-        """Search a specific LibGen mirror."""
-        search_url = f"{mirror}/search.php"
+        """Search a specific LibGen mirror using the correct index.php pattern."""
+        search_url = f"{mirror}/index.php"
         params = {
             'req': query,
-            'lg_topic': 'libgen',
-            'open': '0',
-            'view': 'simple',
-            'res': str(min(max_results, 100)),  # Max 100 per request
-            'phrase': '1',
-            'column': 'def'
+            'columns[]': ['t', 'a', 's', 'y', 'p', 'i'],  # Title, Author, Series, Year, Publisher, ISBN
+            'objects[]': ['f', 'e', 's', 'a', 'p', 'w'],  # Files, Editions, Series, Authors, Publishers, Works
+            'topics[]': ['l', 'c', 'f', 'a', 'm', 'r', 's'],  # All topics
+            'res': str(min(max_results, 100)),
+            'filesuns': 'all',
+            'curtab': 'f'  # Files tab
         }
         
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+        # Configure proxy if available
+        proxy = os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY')
+        
+        connector = None
+        if proxy:
+            connector = aiohttp.TCPConnector()
+            
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=self.timeout),
+            connector=connector
+        ) as session:
             for attempt in range(self.max_retries):
                 try:
-                    async with session.get(search_url, params=params) as response:
+                    async with session.get(search_url, params=params, proxy=proxy) as response:
                         if response.status == 200:
                             html = await response.text()
                             return self._parse_search_results(html, mirror)
@@ -113,48 +128,82 @@ class LibGenSearcher:
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Find results table
-            table = soup.find('table', {'rules': 'cols'})
+            # Find results table - LibGen uses table with id='tablelibgen'
+            table = soup.find('table', {'id': 'tablelibgen'}) or soup.find('table', {'class': 'table table-striped'})
             if not table:
                 return results
                 
-            rows = table.find_all('tr')[1:]  # Skip header row
+            # Get table body rows
+            tbody = table.find('tbody')
+            if tbody:
+                rows = tbody.find_all('tr')
+            else:
+                rows = table.find_all('tr')[1:]  # Skip header row if no tbody
             
             for row in rows:
                 cells = row.find_all('td')
-                if len(cells) < 10:  # Ensure we have enough columns
+                if len(cells) < 9:  # LibGen has 9 columns: Title/Series, Author, Publisher, Year, Language, Pages, Size, Ext, Mirrors
                     continue
                     
                 try:
-                    # Extract book information
+                    # Extract title and series from first cell (complex structure)
+                    title_cell = cells[0]
+                    title_text = title_cell.get_text(strip=True)
+                    
+                    # Try to extract title from the cell structure
+                    title_links = title_cell.find_all('a')
+                    if title_links:
+                        title = title_links[-1].get_text(strip=True)  # Usually the last link is the title
+                    else:
+                        title = title_text
+                    
+                    # Extract book information based on LibGen's actual structure
                     book_info = {
-                        'id': cells[0].get_text(strip=True),
+                        'title': title,
                         'author': cells[1].get_text(strip=True),
-                        'title': cells[2].get_text(strip=True),
-                        'publisher': cells[3].get_text(strip=True),
-                        'year': cells[4].get_text(strip=True),
+                        'publisher': cells[2].get_text(strip=True),
+                        'year': cells[3].get_text(strip=True),
+                        'language': cells[4].get_text(strip=True),
                         'pages': cells[5].get_text(strip=True),
-                        'language': cells[6].get_text(strip=True),
-                        'size': cells[7].get_text(strip=True),
-                        'extension': cells[8].get_text(strip=True),
+                        'size': cells[6].get_text(strip=True),
+                        'extension': cells[7].get_text(strip=True),
                         'mirrors': []
                     }
                     
                     # Extract MD5 hash and download links from the mirrors column
-                    mirrors_cell = cells[9]
+                    mirrors_cell = cells[8]
                     links = mirrors_cell.find_all('a')
                     
                     for link in links:
                         href = link.get('href', '')
-                        if 'md5=' in href:
-                            # Extract MD5 hash
+                        
+                        # Look for different types of download links
+                        if '/ads.php?md5=' in href:
+                            # LibGen mirror 1 (ads.php)
                             md5_match = re.search(r'md5=([a-f0-9]{32})', href)
                             if md5_match:
                                 book_info['md5'] = md5_match.group(1)
                                 book_info['mirrors'].append({
                                     'url': urljoin(base_url, href),
-                                    'type': 'details'
+                                    'type': 'libgen_mirror_1',
+                                    'name': 'LibGen Mirror 1'
                                 })
+                                
+                        elif 'randombook.org' in href:
+                            # RandomBook mirror
+                            book_info['mirrors'].append({
+                                'url': href,
+                                'type': 'randombook',
+                                'name': 'RandomBook'
+                            })
+                            
+                        elif 'annas-archive.org' in href:
+                            # Anna's Archive mirror
+                            book_info['mirrors'].append({
+                                'url': href,
+                                'type': 'annas_archive',
+                                'name': "Anna's Archive"
+                            })
                     
                     # Clean up data
                     book_info = self._clean_book_info(book_info)
@@ -205,6 +254,7 @@ class LibGenSearcher:
     async def get_download_links(self, md5_hash: str) -> List[Dict[str, str]]:
         """
         Get direct download links for a book using its MD5 hash.
+        Follows the LibGen pattern: ads.php -> file details page -> get.php final download
         
         Args:
             md5_hash: MD5 hash of the book
@@ -214,14 +264,85 @@ class LibGenSearcher:
         """
         download_links = []
         
-        for mirror in self.DOWNLOAD_MIRRORS:
+        for mirror in self.download_mirrors:
             try:
-                links = await self._get_download_links_from_mirror(mirror, md5_hash)
+                # Try to get final download links following LibGen's pattern
+                links = await self._get_final_download_links(mirror, md5_hash)
                 download_links.extend(links)
+                
+                # Also try the old method as fallback
+                fallback_links = await self._get_download_links_from_mirror(mirror, md5_hash)
+                download_links.extend(fallback_links)
+                
             except Exception as e:
                 logger.warning(f"Failed to get download links from {mirror}: {str(e)}")
                 continue
                 
+        return download_links
+        
+    async def _get_final_download_links(self, mirror: str, md5_hash: str) -> List[Dict[str, str]]:
+        """
+        Get final download links by following LibGen's pattern:
+        1. Go to ads.php?md5=hash (mirror redirect page)
+        2. Follow to file details page
+        3. Extract final get.php download link with key
+        """
+        download_links = []
+        
+        try:
+            # Step 1: Go to the ads.php redirect page
+            ads_url = f"{mirror}/ads.php?md5={md5_hash}"
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+                # Get the ads.php page (might redirect)
+                async with session.get(ads_url) as response:
+                    if response.status != 200:
+                        return download_links
+                        
+                    html = await response.text()
+                    final_url = str(response.url)  # Get final URL after redirects
+                    
+                    # Parse the final page for download links
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Look for the main GET button/link (pattern: get.php?md5=hash&key=key)
+                    get_links = soup.find_all('a', href=re.compile(r'get\.php\?md5=[a-f0-9]{32}&key=\w+'))
+                    
+                    for link in get_links:
+                        href = link.get('href')
+                        if href:
+                            if href.startswith('http'):
+                                final_download_url = href
+                            else:
+                                final_download_url = urljoin(final_url, href)
+                                
+                            download_links.append({
+                                'url': final_download_url,
+                                'type': 'direct_download',
+                                'name': 'Direct Download',
+                                'text': link.get_text(strip=True)
+                            })
+                            
+                    # Also look for alternative download links
+                    alt_links = soup.find_all('a', href=re.compile(r'/file\.php\?id=\d+'))
+                    for link in alt_links:
+                        href = link.get('href')
+                        if href:
+                            if href.startswith('http'):
+                                alt_url = href
+                            else:
+                                alt_url = urljoin(final_url, href)
+                                
+                            download_links.append({
+                                'url': alt_url,
+                                'type': 'file_download',
+                                'name': 'Alternative Download',
+                                'text': link.get_text(strip=True)
+                            })
+                            
+        except Exception as e:
+            logger.warning(f"Error getting final download links from {mirror}: {str(e)}")
+            
         return download_links
         
     async def _get_download_links_from_mirror(self, mirror: str, md5_hash: str) -> List[Dict[str, str]]:
