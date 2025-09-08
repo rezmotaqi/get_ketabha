@@ -88,9 +88,9 @@ class TelegramLibGenBot:
             await update.message.reply_text("Please send me a book title, author, or ISBN to search.")
             
     async def handle_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
-        """Process search query and return results."""
+        """Process search query and return results one by one."""
         # Send searching message
-        searching_msg = await update.message.reply_text(f"🔍 Searching for: '{query}'...")
+        searching_msg = await update.message.reply_text(f"Searching for: '{query}'...")
         
         try:
             # Perform search
@@ -98,7 +98,7 @@ class TelegramLibGenBot:
             
             if not results:
                 await searching_msg.edit_text(
-                    f"❌ No results found for: '{query}'\n\n"
+                    f"No results found for: '{query}'\n\n"
                     "Try:\n"
                     "• Different keywords\n"
                     "• Author name\n"
@@ -107,24 +107,63 @@ class TelegramLibGenBot:
                 )
                 return
                 
-            # Store results in user context for download callbacks
-            context.user_data['last_search_results'] = results[:5]
+            # Update search message with count
+            await searching_msg.edit_text(f"Found {len(results)} results for: '{query}'\nSending results...")
             
-            # Format and send results
-            formatted_results = self.formatter.format_search_results(results[:5])  # Limit to 5 results
-            keyboard = self.create_download_keyboard(results[:5])
-            
-            await searching_msg.edit_text(
-                f"📚 Found {len(results)} results for: '{query}'\n\n{formatted_results}",
-                reply_markup=keyboard,
-                parse_mode='HTML'
-            )
-            
+            # Send each book result individually with download links
+            for i, book in enumerate(results[:5], 1):  # Limit to 5 results
+                await self.send_individual_book_result(update, book, i)
+                
         except Exception as e:
             logger.error(f"Search error for query '{query}': {str(e)}")
             await searching_msg.edit_text(
-                "❌ Search failed due to an error. Please try again later."
+                "Search failed due to an error. Please try again later."
             )
+            
+    async def send_individual_book_result(self, update: Update, book: Dict[str, Any], index: int) -> None:
+        """Send a single book result with its download links."""
+        try:
+            # Format book details
+            title = book.get('title', 'Unknown Title')
+            author = book.get('author', 'Unknown Author')
+            year = book.get('year', 'Unknown')
+            format_ext = book.get('extension', 'Unknown').upper()
+            md5_hash = book.get('md5', '')
+            
+            # Create clean message
+            message = f"<b>{index}. {title}</b>\n"
+            message += f"<b>Author:</b> {author}\n"
+            message += f"<b>Format:</b> {format_ext} | <b>Year:</b> {year}\n\n"
+            
+            # Get download links
+            if md5_hash:
+                download_links = await self.searcher.get_download_links(md5_hash)
+                
+                if download_links:
+                    message += "<b>Download Links:</b>\n"
+                    for j, link in enumerate(download_links[:3], 1):  # Limit to 3 links per book
+                        link_name = link.get('name') or link.get('text') or f'Download {j}'
+                        link_url = link.get('url', '')
+                        if link_url:
+                            message += f"{j}. <a href='{link_url}'>{link_name}</a>\n"
+                else:
+                    message += "No direct download links found.\n"
+                    message += f"MD5: <code>{md5_hash}</code>"
+            else:
+                message += "No download information available."
+            
+            # Send the individual book result
+            await update.message.reply_text(
+                message,
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+            
+        except Exception as e:
+            logger.error(f"Error sending book result {index}: {str(e)}")
+            # Send simplified version on error
+            simple_message = f"{index}. {book.get('title', 'Unknown')}\nAuthor: {book.get('author', 'Unknown')}\nFormat: {book.get('extension', 'Unknown')}"
+            await update.message.reply_text(simple_message)
             
     def create_download_keyboard(self, results: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
         """Create inline keyboard with download buttons."""
