@@ -59,15 +59,15 @@ class LibGenWebHandler(BaseHTTPRequestHandler):
         </head>
         <body>
             <div class="container">
-                <h1>📚 LibGen Search Bot</h1>
-                <div class="status">✅ LibGen Search Engine: WORKING</div>
+                <h1>LibGen Search Bot</h1>
+                <div class="status">LibGen Search Engine: WORKING</div>
                 <p>Search for books from LibGen mirrors. Enter book title, author name, or ISBN.</p>
                 
                 {f'<div class="message">{message}</div>' if message else ''}
                 
                 <form action="/search" method="get" class="search-box">
                     <input type="text" name="q" placeholder="Enter book title, author, or ISBN..." required>
-                    <button type="submit">🔍 Search</button>
+                    <button type="submit">Search</button>
                 </form>
                 
                 <h3>Example searches:</h3>
@@ -130,31 +130,28 @@ class LibGenWebHandler(BaseHTTPRequestHandler):
         if error_message:
             results_html = f'<div class="message">{error_message}</div>'
         elif results:
-            results_html = f'<h2>📚 Found {len(results)} results for: "{query}"</h2>'
+            results_html = f'<h2>Found {len(results)} results for: "{query}"</h2>'
             for i, book in enumerate(results, 1):
                 # Build download links HTML
                 download_links_html = ""
                 download_links = book.get('download_links', [])
                 
                 if download_links:
-                    download_links_html = '<div class="download-links"><p><strong>📥 Download Links:</strong></p>'
+                    download_links_html = '<div class="download-links"><p><strong>Download Links:</strong></p>'
                     for j, link in enumerate(download_links[:5], 1):  # Limit to 5 links
                         link_name = link.get('name') or link.get('text') or f'Download {j}'
                         link_url = link.get('url', '#')
                         download_links_html += f'<a href="{link_url}" target="_blank" class="download-link">{link_name}</a>'
                     download_links_html += '</div>'
                 else:
-                    download_links_html = '<p><em>🔍 No direct download links found. Use MD5 hash on LibGen mirrors.</em></p>'
+                    download_links_html = '<p><em>No direct download links found. Use MD5 hash on LibGen mirrors.</em></p>'
                 
                 results_html += f"""
                 <div style="border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px; background: #fafafa;">
                     <h3>{i}. {book.get('title', 'N/A')}</h3>
-                    <p><strong>👤 Author:</strong> {book.get('author', 'N/A')}</p>
-                    <p><strong>📅 Year:</strong> {book.get('year', 'N/A')} | 
-                       <strong>💾 Size:</strong> {book.get('size', 'N/A')} | 
-                       <strong>📄 Format:</strong> {book.get('extension', 'N/A')}</p>
+                    <p><strong>Author:</strong> {book.get('author', 'N/A')}</p>
+                    <p><strong>Format:</strong> {book.get('extension', 'N/A')} | <strong>Year:</strong> {book.get('year', 'N/A')}</p>
                     {download_links_html}
-                    <p><strong>🔑 MD5:</strong> <code style="background: #f8f9fa; padding: 2px 4px; border-radius: 3px;">{book.get('md5', 'N/A')}</code></p>
                 </div>
                 """
         
@@ -179,12 +176,12 @@ class LibGenWebHandler(BaseHTTPRequestHandler):
         </head>
         <body>
             <div class="container">
-                <h1>📚 LibGen Search Results</h1>
+                <h1>LibGen Search Results</h1>
                 <p><a href="/">← Back to Search</a></p>
                 
                 {results_html}
                 
-                <p><a href="/">🔍 Search Again</a></p>
+                <p><a href="/">Search Again</a></p>
             </div>
         </body>
         </html>
