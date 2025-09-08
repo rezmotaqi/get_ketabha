@@ -150,12 +150,20 @@ class LibGenSearcher:
                     title_cell = cells[0]
                     title_text = title_cell.get_text(strip=True)
                     
-                    # Try to extract title from the cell structure
+                    # Try to extract title from the cell structure - improved parsing
                     title_links = title_cell.find_all('a')
                     if title_links:
-                        title = title_links[-1].get_text(strip=True)  # Usually the last link is the title
+                        # Try different approaches to get the actual title
+                        for link in title_links:
+                            link_text = link.get_text(strip=True)
+                            if link_text and len(link_text) > 2 and link_text != 'b':
+                                title = link_text
+                                break
+                        else:
+                            # Fallback to the full cell text if links don't work
+                            title = title_text if title_text and len(title_text) > 2 else "Unknown Title"
                     else:
-                        title = title_text
+                        title = title_text if title_text and len(title_text) > 2 else "Unknown Title"
                     
                     # Extract book information based on LibGen's actual structure
                     book_info = {

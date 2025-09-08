@@ -77,17 +77,17 @@ class TelegramLibGenBot:
             return
             
         query = ' '.join(context.args)
-        await self.handle_search(update, query)
+        await self.handle_search(update, context, query)
         
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle text messages as search queries."""
         query = update.message.text.strip()
         if query:
-            await self.handle_search(update, query)
+            await self.handle_search(update, context, query)
         else:
             await update.message.reply_text("Please send me a book title, author, or ISBN to search.")
             
-    async def handle_search(self, update: Update, query: str) -> None:
+    async def handle_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
         """Process search query and return results."""
         # Send searching message
         searching_msg = await update.message.reply_text(f"🔍 Searching for: '{query}'...")
@@ -181,7 +181,8 @@ class TelegramLibGenBot:
             links_text += "🔗 **Download Links:**\n"
             
             for i, link in enumerate(download_links[:5], 1):  # Limit to 5 links
-                links_text += f"{i}. [{link['name']}]({link['url']})\n"
+                link_name = link.get('name') or link.get('text') or 'Download'
+                links_text += f"{i}. [{link_name}]({link['url']})\n"
                 
             links_text += f"\n🔍 MD5: `{md5_hash}`"
             
