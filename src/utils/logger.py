@@ -49,11 +49,47 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
     console_handler.setFormatter(simple_formatter)
     logger.addHandler(console_handler)
     
-    # File handler (if logs directory exists and is writable)
-    logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'logs')
-    if os.path.exists(logs_dir) and os.access(logs_dir, os.W_OK):
+    # File handler (try multiple possible locations for logs directory)
+    # Prioritize current working directory to handle Docker environments better
+    possible_logs_dirs = [
+        os.path.join(os.getcwd(), 'logs'),  # Current working directory (works in Docker)
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'logs'),  # Original relative path
+        '/tmp/bot_logs'  # Fallback to tmp
+    ]
+    
+    logs_dir = None
+    for candidate_dir in possible_logs_dirs:
+        try:
+            if os.path.exists(candidate_dir) and os.access(candidate_dir, os.W_OK):
+                # Test if we can actually write to this directory
+                test_file = os.path.join(candidate_dir, '.write_test')
+                try:
+                    with open(test_file, 'w') as f:
+                        f.write('test')
+                    os.remove(test_file)
+                    logs_dir = candidate_dir
+                    break
+                except (PermissionError, OSError):
+                    continue
+            elif not os.path.exists(candidate_dir):
+                # Try to create the directory
+                try:
+                    os.makedirs(candidate_dir, exist_ok=True)
+                    if os.access(candidate_dir, os.W_OK):
+                        # Test if we can write to this directory
+                        test_file = os.path.join(candidate_dir, '.write_test')
+                        with open(test_file, 'w') as f:
+                            f.write('test')
+                        os.remove(test_file)
+                        logs_dir = candidate_dir
+                        break
+                except (PermissionError, OSError):
+                    continue
+        except Exception:
+            continue
+    
+    if logs_dir:
         log_file = os.path.join(logs_dir, 'bot.log')
-        
         try:
             # Rotating file handler (max 10MB, keep 5 backups)
             file_handler = RotatingFileHandler(
@@ -68,10 +104,10 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
         except (PermissionError, OSError) as e:
             logger.warning(f"Could not create file handler for {log_file}: {e}")
     else:
-        logger.warning(f"Logs directory {logs_dir} does not exist or is not writable")
+        logger.warning("Could not find or create a writable logs directory - file logging disabled")
     
     # Error file handler for errors and above
-    if os.path.exists(logs_dir) and os.access(logs_dir, os.W_OK):
+    if logs_dir:
         error_file = os.path.join(logs_dir, 'errors.log')
         try:
             error_handler = RotatingFileHandler(

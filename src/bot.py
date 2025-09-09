@@ -747,7 +747,7 @@ class TelegramLibGenBot:
                     asyncio.create_task(check_cancellation())
                 ],
                 return_when=asyncio.FIRST_COMPLETED,
-                timeout=5.0
+                timeout=self.download_links_timeout
             )
             
             # Cancel any remaining tasks
