@@ -41,14 +41,43 @@ class TelegramLibGenBot:
         self.token = token
         self.searcher = LibGenSearcher()
         self.formatter = BookFormatter()
-        # Optional: send files directly as Telegram documents (ensures proper filename)
+        
+        # Load configuration from environment variables
+        self._load_config()
+    
+    def _load_config(self):
+        """Load all configuration from environment variables."""
+        # Telegram settings
         send_doc_env = os.getenv('TELEGRAM_SEND_DOCUMENT', 'false').strip().lower()
         self.send_document_enabled = send_doc_env in ['1', 'true', 'yes', 'on']
-        # Max download size in MB when sending as document
         try:
             self.max_download_mb = float(os.getenv('TELEGRAM_MAX_DOWNLOAD_MB', '50'))
         except ValueError:
             self.max_download_mb = 50.0
+        
+        # Bot behavior settings
+        self.books_per_page = int(os.getenv('BOT_BOOKS_PER_PAGE', '5'))
+        self.max_links_per_book = int(os.getenv('BOT_MAX_LINKS_PER_BOOK', '8'))
+        self.download_links_timeout = float(os.getenv('BOT_DOWNLOAD_LINKS_TIMEOUT', '10.0'))
+        self.max_alternative_links = int(os.getenv('BOT_MAX_ALTERNATIVE_LINKS', '3'))
+        
+        # Performance settings
+        self.book_processing_delay = float(os.getenv('BOT_BOOK_PROCESSING_DELAY', '0.1'))
+        self.cancellation_check_interval = float(os.getenv('BOT_CANCELLATION_CHECK_INTERVAL', '0.25'))
+        self.cancellation_checks_count = int(os.getenv('BOT_CANCELLATION_CHECKS_COUNT', '20'))
+        
+        # Message customization
+        self.bot_name = os.getenv('BOT_NAME', 'LibGen Search Bot')
+        self.bot_description = os.getenv('BOT_DESCRIPTION', 'Search for books by sending me a book title, author name, or ISBN.')
+        
+        # Feature flags
+        self.feature_download_links = os.getenv('FEATURE_DOWNLOAD_LINKS', 'true').lower() in ['true', '1', 'yes', 'on']
+        self.feature_alternative_search = os.getenv('FEATURE_ALTERNATIVE_SEARCH', 'true').lower() in ['true', '1', 'yes', 'on']
+        self.feature_pagination = os.getenv('FEATURE_PAGINATION', 'true').lower() in ['true', '1', 'yes', 'on']
+        self.feature_stop_command = os.getenv('FEATURE_STOP_COMMAND', 'true').lower() in ['true', '1', 'yes', 'on']
+        
+        # HTTP settings
+        self.http_user_agent = os.getenv('HTTP_USER_AGENT', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36')
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
@@ -56,8 +85,8 @@ class TelegramLibGenBot:
             return
             
         welcome_message = (
-            "🤖 **Welcome to LibGen Search Bot!**\n\n"
-            "📚 **Search for books** by sending me:\n"
+            f"🤖 **Welcome to {self.bot_name}!**\n\n"
+            f"📚 **{self.bot_description}**\n\n"
             "• 📖 Book title\n"
             "• ✍️ Author name  \n"
             "• 🔢 ISBN number\n\n"
@@ -71,7 +100,7 @@ class TelegramLibGenBot:
             return
             
         help_message = (
-            "📖 **LibGen Search Bot Help**\n\n"
+            f"📖 **{self.bot_name} Help**\n\n"
             "🤖 **Commands:**\n"
             "• 🏁 `/start` - Start the bot\n"
             "• ❓ `/help` - Show this help\n"
@@ -185,8 +214,8 @@ class TelegramLibGenBot:
             )
             
     async def send_paginated_results(self, update: Update, context: ContextTypes.DEFAULT_TYPE, results: List[Dict[str, Any]], page: int = 0) -> None:
-        """Send search results in pages of 5 books with pagination buttons."""
-        books_per_page = 5
+        """Send search results in pages with pagination buttons."""
+        books_per_page = self.books_per_page
         start_idx = page * books_per_page
         end_idx = min(start_idx + books_per_page, len(results))
         
@@ -341,8 +370,8 @@ class TelegramLibGenBot:
                     book_info += "\n"
                     message_parts.append(book_info)
                     
-                    # Small delay between books to allow stop command processing
-                    await asyncio.sleep(0.1)
+                    # Configurable delay between books to allow stop command processing
+                    await asyncio.sleep(self.book_processing_delay)
                     
                 except Exception as e:
                     logger.error(f"Error processing book {i}: {str(e)}")
@@ -387,15 +416,29 @@ class TelegramLibGenBot:
         search_query = '+'.join(search_terms[:3])  # Limit to avoid too long URLs
         
         if search_query:
-            # Add various search engines and library sites (Updated September 2025 - most reliable)
+            # Optimized for English Book Retrieval - Priority Order (September 2025)
             alternative_links.extend([
+                # Rank #1: LibGen "Format 2" Mirrors (Top performing for English books)
+                f"https://libgen.la/search.php?req={search_query}",
+                f"https://libgen.li/search.php?req={search_query}",
+                f"https://libgen.gl/search.php?req={search_query}",
+                f"https://libgen.vg/search.php?req={search_query}",
+                f"https://libgen.bz/search.php?req={search_query}",
+                # Rank #2: Anna's Archive (Meta-search aggregating LibGen, Sci-Hub, Z-Library)
                 f"https://annas-archive.org/search?q={search_query}",
                 f"https://annas-archive.li/search?q={search_query}",
+                f"https://annas-archive.se/search?q={search_query}",
+                # Rank #3: Z-Library (Large database, good performance)
                 f"https://z-library.sk/s/{search_query}",
-                f"https://libgen.li/search.php?req={search_query}",
-                f"https://libgen.la/search.php?req={search_query}",
-                f"https://libgen.gl/search.php?req={search_query}",
+                # Rank #4: Ocean of PDF (Clean interface, quick downloads)
+                f"https://oceanofpdf.com/?s={search_query}",
+                # Rank #5: Liber3 (Fast and typically ad-free)
+                f"https://liber3.eth.limo/search?q={search_query}",
+                # Rank #6: Memory of the World (Solid fallback option)
+                f"https://library.memoryoftheworld.org/search?q={search_query}",
+                # Additional sources
                 f"http://library.lol/search/{search_query}",
+                f"https://cyberleninka.ru/search?q={search_query}",
             ])
         
         return alternative_links
@@ -441,7 +484,7 @@ class TelegramLibGenBot:
 
     async def send_paginated_results_edit(self, query, context: ContextTypes.DEFAULT_TYPE, results: List[Dict[str, Any]], page: int) -> None:
         """Edit message with new page of results."""
-        books_per_page = 5
+        books_per_page = self.books_per_page
         start_idx = page * books_per_page
         end_idx = min(start_idx + books_per_page, len(results))
         
@@ -532,7 +575,7 @@ class TelegramLibGenBot:
             
             if alternative_links:
                 links_text += "🔍 **Alternative Search Links:**\n\n"
-                for i, link in enumerate(alternative_links[:3], 1):
+                for i, link in enumerate(alternative_links[:self.max_alternative_links], 1):
                     links_text += f"🌐 **{i}.** {link}\n\n"
             else:
                 links_text += "❌ **No MD5 hash available for direct download links.**"
@@ -548,10 +591,10 @@ class TelegramLibGenBot:
         await query.edit_message_text(f"🔗 Getting download links for: {title}...")
         
         try:
-            # Get download links with timeout
+            # Get download links with configurable timeout
             download_links = await asyncio.wait_for(
                 self.searcher.get_download_links(md5_hash), 
-                timeout=10.0
+                timeout=self.download_links_timeout
             )
             
             if not download_links:
@@ -569,7 +612,7 @@ class TelegramLibGenBot:
             links_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             links_text += "🔗 **Download Links:**\n\n"
             
-            for i, link in enumerate(download_links[:8], 1):
+            for i, link in enumerate(download_links[:self.max_links_per_book], 1):
                 url = link.get('url', '')
                 if url:
                     links_text += f"📥 **{i}.** {url}\n\n"
@@ -600,10 +643,10 @@ class TelegramLibGenBot:
         """Fetch download links with frequent cancellation checks."""
         async def check_cancellation():
             """Periodically check for stop requests."""
-            for _ in range(20):  # Check every 0.25 seconds for 5 seconds total
+            for _ in range(self.cancellation_checks_count):  # Configurable cancellation checks
                 if context.user_data.get('stop_search'):
                     return True
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(self.cancellation_check_interval)
             return False
         
         # Run the download link fetching and cancellation check concurrently
@@ -671,7 +714,7 @@ class TelegramLibGenBot:
     async def _send_document_from_url(self, update: Update, url: str, referer: Optional[str] = None, suggested_filename: Optional[str] = None) -> None:
         """Download a file from URL (with size cap) and send as Telegram document with proper filename."""
         headers = {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36'
+            'User-Agent': self.http_user_agent
         }
         if referer:
             headers['Referer'] = referer
@@ -781,12 +824,17 @@ class TelegramLibGenBot:
         else:
             application = Application.builder().token(self.token).build()
         
-        # Add handlers
+        # Add handlers based on feature flags
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("search", self.search_command))
-        application.add_handler(CommandHandler("stop", self.stop_command))
-        application.add_handler(CallbackQueryHandler(self.handle_callback_query))
+        
+        if self.feature_stop_command:
+            application.add_handler(CommandHandler("stop", self.stop_command))
+            
+        if self.feature_pagination:
+            application.add_handler(CallbackQueryHandler(self.handle_callback_query))
+            
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
         # Start the bot

@@ -24,29 +24,32 @@ logger = setup_logger(__name__)
 class LibGenSearcher:
     """Main class for searching LibGen sites."""
     
-    def __init__(self, timeout: int = 30, max_retries: int = 1):
+    def __init__(self, timeout: int = None, max_retries: int = None):
         """Initialize the searcher."""
-        self.timeout = timeout
-        self.max_retries = max_retries  # Now used per mirror, not total
+        # Load configuration from environment variables
+        self.timeout = timeout or int(os.getenv('LIBGEN_SEARCH_TIMEOUT', '30'))
+        self.max_retries = max_retries or int(os.getenv('LIBGEN_MAX_RETRIES', '1'))
         
-        # Load mirrors from environment variables - Updated September 2025 with most reliable mirrors
+        # Load mirrors from environment variables - Optimized for English Book Retrieval (Sep 2025)
+        # Priority order: Best performing mirrors first for English books
         search_mirrors_env = os.getenv('LIBGEN_SEARCH_MIRRORS', 
-                                       'https://libgen.li,https://libgen.la,https://libgen.gl,https://libgen.vg,https://libgen.bz,https://libgen.is')
+                                       'https://libgen.la,https://libgen.li,https://libgen.gl,https://libgen.vg,https://libgen.bz,http://libgen.rs,http://gen.lib.rus.ec,https://libgen.fun,https://libgen.is')
         self.libgen_mirrors = [url.strip() for url in search_mirrors_env.split(',') if url.strip()]
         
         download_mirrors_env = os.getenv('LIBGEN_DOWNLOAD_MIRRORS', 
-                                         'https://libgen.li,https://libgen.la,https://libgen.gl,https://libgen.vg,https://libgen.bz,https://libgen.is,http://library.lol')
+                                         'https://libgen.la,https://libgen.li,https://libgen.gl,https://libgen.vg,https://libgen.bz,http://libgen.rs,http://gen.lib.rus.ec,https://libgen.fun,https://libgen.is,http://library.lol')
         self.download_mirrors = [url.strip() for url in download_mirrors_env.split(',') if url.strip()]
 
         # Control whether to resolve get.php links to final URLs and filenames
         resolve_env = os.getenv('LIBGEN_RESOLVE_FINAL_URLS', 'true').strip().lower()
         self.resolve_final_urls = resolve_env in ['1', 'true', 'yes', 'on']
         
-        logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors (Updated September 2025): {', '.join(self.libgen_mirrors)}")
-        logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors (Updated September 2025): {', '.join(self.download_mirrors)}")
+        logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors (Comprehensive Sep 2025): {', '.join(self.libgen_mirrors)}")
+        logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors (Comprehensive Sep 2025): {', '.join(self.download_mirrors)}")
         logger.info(f"Resolve final download URLs: {self.resolve_final_urls}")
+        logger.info("Includes: Active mirrors, Russian LibGen mirrors, Anna's Archive, Z-Library, CyberLeninka")
         
-    async def search(self, query: str, max_results: int = 200) -> List[Dict[str, Any]]:
+    async def search(self, query: str, max_results: int = None) -> List[Dict[str, Any]]:
         """
         Search for books across LibGen mirrors.
         
@@ -57,6 +60,10 @@ class LibGenSearcher:
         Returns:
             List of book dictionaries with metadata
         """
+        # Use environment variable for max_results if not provided
+        if max_results is None:
+            max_results = int(os.getenv('LIBGEN_MAX_RESULTS', '200'))
+            
         logger.info(f"Searching for: {query}")
         
         results = []
@@ -91,7 +98,7 @@ class LibGenSearcher:
             'columns[]': ['t', 'a', 's', 'y', 'p', 'i'],  # Title, Author, Series, Year, Publisher, ISBN
             'objects[]': ['f', 'e', 's', 'a', 'p', 'w'],  # Files, Editions, Series, Authors, Publishers, Works
             'topics[]': ['l', 'c', 'f', 'a', 'm', 'r', 's'],  # All topics
-            'res': str(min(max_results, 300)),
+            'res': str(min(max_results, int(os.getenv('LIBGEN_MIRROR_REQUEST_LIMIT', '300')))),
             'filesuns': 'all',
             'curtab': 'f'  # Files tab
         }
@@ -333,7 +340,7 @@ class LibGenSearcher:
                 'text': 'Library.lol Direct'
             })
         
-        # Add Anna's Archive links (Updated September 2025 - most reliable alternatives)
+        # Add Anna's Archive links (Rank #2 - Meta-search engine aggregating LibGen, Sci-Hub, Z-Library)
         annas_archive_links = [
             f"https://annas-archive.org/md5/{md5_hash}",
             f"https://annas-archive.li/md5/{md5_hash}",
@@ -345,10 +352,10 @@ class LibGenSearcher:
                 'url': url,
                 'type': 'annas_archive',
                 'name': "Anna's Archive",
-                'text': "Anna's Archive"
+                'text': "Meta-Search Engine"
             })
         
-        # Add Z-Library links (Updated September 2025)
+        # Add Z-Library links (Rank #3 - Large database, good performance)
         z_lib_links = [
             f"https://z-library.sk/md5/{md5_hash}",
         ]
@@ -358,17 +365,61 @@ class LibGenSearcher:
                 'url': url,
                 'type': 'z_library',
                 'name': 'Z-Library',
-                'text': 'Z-Library'
+                'text': 'Comprehensive Shadow Library'
             })
         
-        # Add direct LibGen mirror links (Updated September 2025 - most reliable mirrors)
+        # Add Ocean of PDF links (Rank #4 - Clean interface, quick downloads)
+        ocean_pdf_links = [
+            f"https://oceanofpdf.com/?s={md5_hash}",
+        ]
+        
+        for url in ocean_pdf_links:
+            additional_links.append({
+                'url': url,
+                'type': 'ocean_pdf',
+                'name': 'Ocean of PDF',
+                'text': 'Clean Interface'
+            })
+        
+        # Add Liber3 links (Rank #5 - Fast and typically ad-free)
+        liber3_links = [
+            f"https://liber3.eth.limo/search?q={md5_hash}",
+        ]
+        
+        for url in liber3_links:
+            additional_links.append({
+                'url': url,
+                'type': 'liber3',
+                'name': 'Liber3',
+                'text': 'Fast & Ad-Free'
+            })
+        
+        # Add Memory of the World links (Rank #6 - Solid fallback option)
+        memory_world_links = [
+            f"https://library.memoryoftheworld.org/search?q={md5_hash}",
+        ]
+        
+        for url in memory_world_links:
+            additional_links.append({
+                'url': url,
+                'type': 'memory_world',
+                'name': 'Memory of the World',
+                'text': 'Minimal Overhead'
+            })
+        
+        # Add direct LibGen mirror links (Updated September 2025 - comprehensive list)
         libgen_direct_links = [
+            # Active Mirrors (Sep 2025) - Primary
             f"https://libgen.li/book/index.php?md5={md5_hash}",
             f"https://libgen.la/book/index.php?md5={md5_hash}",
             f"https://libgen.gl/book/index.php?md5={md5_hash}",
             f"https://libgen.vg/book/index.php?md5={md5_hash}",
             f"https://libgen.bz/book/index.php?md5={md5_hash}",
             f"https://libgen.is/book/index.php?md5={md5_hash}",
+            # Russian LibGen-related Mirrors
+            f"http://libgen.rs/book/index.php?md5={md5_hash}",
+            f"http://gen.lib.rus.ec/book/index.php?md5={md5_hash}",
+            f"https://libgen.fun/book/index.php?md5={md5_hash}",
         ]
         
         for url in libgen_direct_links:
@@ -377,6 +428,19 @@ class LibGenSearcher:
                 'type': 'libgen_direct',
                 'name': 'LibGen Direct',
                 'text': 'LibGen Mirror'
+            })
+        
+        # Add CyberLeninka (Legal Russian Repository for scientific papers)
+        cyberleninka_links = [
+            f"https://cyberleninka.ru/search?q={md5_hash}",
+        ]
+        
+        for url in cyberleninka_links:
+            additional_links.append({
+                'url': url,
+                'type': 'cyberleninka',
+                'name': 'CyberLeninka',
+                'text': 'Legal Russian Repository'
             })
         
         return additional_links
@@ -556,7 +620,7 @@ class LibGenSearcher:
         Tries HEAD first; if not allowed, performs a ranged GET (first byte) to avoid large transfers.
         """
         headers = {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36'
+            'User-Agent': os.getenv('HTTP_USER_AGENT', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36')
         }
         if referer:
             headers['Referer'] = referer
