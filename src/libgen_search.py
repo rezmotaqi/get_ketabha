@@ -37,9 +37,14 @@ class LibGenSearcher:
         download_mirrors_env = os.getenv('LIBGEN_DOWNLOAD_MIRRORS', 
                                          'http://library.lol,http://libgen.rs,http://libgen.is,https://libgen.la')
         self.download_mirrors = [url.strip() for url in download_mirrors_env.split(',') if url.strip()]
+
+        # Control whether to resolve get.php links to final URLs and filenames
+        resolve_env = os.getenv('LIBGEN_RESOLVE_FINAL_URLS', 'true').strip().lower()
+        self.resolve_final_urls = resolve_env in ['1', 'true', 'yes', 'on']
         
         logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors: {', '.join(self.libgen_mirrors)}")
         logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors: {', '.join(self.download_mirrors)}")
+        logger.info(f"Resolve final download URLs: {self.resolve_final_urls}")
         
     async def search(self, query: str, max_results: int = 50) -> List[Dict[str, Any]]:
         """
@@ -313,6 +318,48 @@ class LibGenSearcher:
                     # Parse the final page for download links
                     soup = BeautifulSoup(html, 'html.parser')
                     
+                    # Prefer any direct mirrors first (Cloudflare/IPFS/CDN endpoints) if present
+                    direct_patterns = [
+                        r'https?://(?:[\w.-]*cloudflare|cfcdn)[\w.-]*/[^\s\"]+',
+                        r'https?://ipfs\.[\w.-]+/[^\s\"]+',
+                        r'https?://(?:[\w.-]*cdn)[\w.-]*/[^\s\"]+'
+                    ]
+                    direct_links: List[Dict[str, str]] = []
+                    for pattern in direct_patterns:
+                        for a in soup.find_all('a', href=re.compile(pattern, re.I)):
+                            href = a.get('href')
+                            if not href:
+                                continue
+                            direct_links.append({
+                                'url': href,
+                                'type': 'direct_mirror',
+                                'name': 'Direct Mirror',
+                                'text': a.get_text(strip=True) or 'Direct Mirror'
+                            })
+
+                    # If we found direct links, optionally resolve and return them with priority
+                    if direct_links:
+                        resolved_direct: List[Dict[str, str]] = []
+                        for dl in direct_links:
+                            resolved_url = dl['url']
+                            filename = None
+                            content_type = None
+                            if self.resolve_final_urls:
+                                try:
+                                    resolution = await self._resolve_download_link(session, dl['url'], referer=final_url)
+                                    resolved_url = resolution.get('final_url') or dl['url']
+                                    filename = resolution.get('filename')
+                                    content_type = resolution.get('content_type')
+                                except Exception:
+                                    pass
+                            link_dict = {**dl, 'url': resolved_url}
+                            if filename:
+                                link_dict['filename'] = filename
+                            if content_type:
+                                link_dict['content_type'] = content_type
+                            resolved_direct.append(link_dict)
+                        download_links.extend(resolved_direct)
+
                     # Look for the main GET button/link (pattern: get.php?md5=hash&key=key)
                     get_links = soup.find_all('a', href=re.compile(r'get\.php\?md5=[a-f0-9]{32}&key=\w+'))
                     
@@ -323,13 +370,31 @@ class LibGenSearcher:
                                 final_download_url = href
                             else:
                                 final_download_url = urljoin(final_url, href)
-                                
-                            download_links.append({
-                                'url': final_download_url,
+                            
+                            # Optionally resolve to final URL and filename
+                            filename = None
+                            resolved_url = final_download_url
+                            content_type = None
+                            if self.resolve_final_urls:
+                                try:
+                                    resolution = await self._resolve_download_link(session, final_download_url, referer=final_url)
+                                    resolved_url = resolution.get('final_url') or final_download_url
+                                    filename = resolution.get('filename')
+                                    content_type = resolution.get('content_type')
+                                except Exception as _:
+                                    pass
+                            
+                            link_dict: Dict[str, str] = {
+                                'url': resolved_url,
                                 'type': 'direct_download',
                                 'name': 'Direct Download',
                                 'text': link.get_text(strip=True)
-                            })
+                            }
+                            if filename:
+                                link_dict['filename'] = filename
+                            if content_type:
+                                link_dict['content_type'] = content_type
+                            download_links.append(link_dict)
                             
                     # Also look for alternative download links
                     alt_links = soup.find_all('a', href=re.compile(r'/file\.php\?id=\d+'))
@@ -340,13 +405,31 @@ class LibGenSearcher:
                                 alt_url = href
                             else:
                                 alt_url = urljoin(final_url, href)
-                                
-                            download_links.append({
-                                'url': alt_url,
+                            
+                            # Optionally resolve alt link
+                            filename = None
+                            resolved_url = alt_url
+                            content_type = None
+                            if self.resolve_final_urls:
+                                try:
+                                    resolution = await self._resolve_download_link(session, alt_url, referer=final_url)
+                                    resolved_url = resolution.get('final_url') or alt_url
+                                    filename = resolution.get('filename')
+                                    content_type = resolution.get('content_type')
+                                except Exception as _:
+                                    pass
+                            
+                            alt_dict: Dict[str, str] = {
+                                'url': resolved_url,
                                 'type': 'file_download',
                                 'name': 'Alternative Download',
                                 'text': link.get_text(strip=True)
-                            })
+                            }
+                            if filename:
+                                alt_dict['filename'] = filename
+                            if content_type:
+                                alt_dict['content_type'] = content_type
+                            download_links.append(alt_dict)
                             
         except Exception as e:
             logger.warning(f"Error getting final download links from {mirror}: {str(e)}")
@@ -379,6 +462,77 @@ class LibGenSearcher:
                     
         return download_urls
         
+    async def _resolve_download_link(self, session: aiohttp.ClientSession, url: str, referer: Optional[str] = None) -> Dict[str, Any]:
+        """Resolve a download link to its final URL and extract filename without downloading the file.
+
+        Tries HEAD first; if not allowed, performs a ranged GET (first byte) to avoid large transfers.
+        """
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36'
+        }
+        if referer:
+            headers['Referer'] = referer
+        try:
+            async with session.head(url, headers=headers, allow_redirects=True) as resp:
+                final_url = str(resp.url)
+                disposition = resp.headers.get('Content-Disposition', '')
+                filename = self._extract_filename_from_disposition(disposition) or self._infer_filename_from_url(final_url)
+                return {
+                    'final_url': final_url,
+                    'filename': filename,
+                    'content_type': resp.headers.get('Content-Type')
+                }
+        except Exception:
+            # Fallback to a ranged GET request
+            ranged_headers = {**headers, 'Range': 'bytes=0-0'}
+            async with session.get(url, headers=ranged_headers, allow_redirects=True) as resp:
+                final_url = str(resp.url)
+                disposition = resp.headers.get('Content-Disposition', '')
+                filename = self._extract_filename_from_disposition(disposition) or self._infer_filename_from_url(final_url)
+                try:
+                    await resp.release()
+                except Exception:
+                    pass
+                return {
+                    'final_url': final_url,
+                    'filename': filename,
+                    'content_type': resp.headers.get('Content-Type')
+                }
+
+    def _extract_filename_from_disposition(self, content_disposition: str) -> Optional[str]:
+        """Extract filename from Content-Disposition header if present."""
+        if not content_disposition:
+            return None
+        # Try RFC 5987 filename*
+        match_ext = re.search(r"filename\*=(?:UTF-8''|)\s*([^;]+)", content_disposition, flags=re.IGNORECASE)
+        if match_ext:
+            filename = match_ext.group(1)
+            try:
+                # Handle percent-encoding
+                from urllib.parse import unquote
+                return unquote(filename.strip('"'))
+            except Exception:
+                return filename.strip('"')
+        # Fallback to filename=
+        match = re.search(r'filename="?([^";]+)"?', content_disposition, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return None
+
+    def _infer_filename_from_url(self, url: str) -> Optional[str]:
+        """Infer a reasonable filename from the URL path if possible."""
+        try:
+            from urllib.parse import urlparse, unquote
+            path = urlparse(url).path
+            if not path:
+                return None
+            name = os.path.basename(path)
+            name = unquote(name)
+            if not name or '.' not in name:
+                return None
+            return name
+        except Exception:
+            return None
     def _extract_download_links(self, html: str, base_url: str) -> List[Dict[str, str]]:
         """Extract download links from book details page."""
         links = []
