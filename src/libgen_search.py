@@ -29,24 +29,24 @@ class LibGenSearcher:
         self.timeout = timeout
         self.max_retries = max_retries  # Now used per mirror, not total
         
-        # Load mirrors from environment variables
+        # Load mirrors from environment variables - Updated September 2025 with most reliable mirrors
         search_mirrors_env = os.getenv('LIBGEN_SEARCH_MIRRORS', 
-                                       'http://libgen.rs,http://libgen.is,https://libgen.la,http://libgen.st,https://libgen.fun')
+                                       'https://libgen.li,https://libgen.la,https://libgen.gl,https://libgen.vg,https://libgen.bz,https://libgen.is')
         self.libgen_mirrors = [url.strip() for url in search_mirrors_env.split(',') if url.strip()]
         
         download_mirrors_env = os.getenv('LIBGEN_DOWNLOAD_MIRRORS', 
-                                         'http://library.lol,http://libgen.rs,http://libgen.is,https://libgen.la')
+                                         'https://libgen.li,https://libgen.la,https://libgen.gl,https://libgen.vg,https://libgen.bz,https://libgen.is,http://library.lol')
         self.download_mirrors = [url.strip() for url in download_mirrors_env.split(',') if url.strip()]
 
         # Control whether to resolve get.php links to final URLs and filenames
         resolve_env = os.getenv('LIBGEN_RESOLVE_FINAL_URLS', 'true').strip().lower()
         self.resolve_final_urls = resolve_env in ['1', 'true', 'yes', 'on']
         
-        logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors: {', '.join(self.libgen_mirrors)}")
-        logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors: {', '.join(self.download_mirrors)}")
+        logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors (Updated September 2025): {', '.join(self.libgen_mirrors)}")
+        logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors (Updated September 2025): {', '.join(self.download_mirrors)}")
         logger.info(f"Resolve final download URLs: {self.resolve_final_urls}")
         
-    async def search(self, query: str, max_results: int = 50) -> List[Dict[str, Any]]:
+    async def search(self, query: str, max_results: int = 200) -> List[Dict[str, Any]]:
         """
         Search for books across LibGen mirrors.
         
@@ -91,7 +91,7 @@ class LibGenSearcher:
             'columns[]': ['t', 'a', 's', 'y', 'p', 'i'],  # Title, Author, Series, Year, Publisher, ISBN
             'objects[]': ['f', 'e', 's', 'a', 'p', 'w'],  # Files, Editions, Series, Authors, Publishers, Works
             'topics[]': ['l', 'c', 'f', 'a', 'm', 'r', 's'],  # All topics
-            'res': str(min(max_results, 100)),
+            'res': str(min(max_results, 300)),
             'filesuns': 'all',
             'curtab': 'f'  # Files tab
         }
@@ -187,20 +187,26 @@ class LibGenSearcher:
                     mirrors_cell = cells[8]
                     links = mirrors_cell.find_all('a')
                     
+                    # Try to extract MD5 from various sources
+                    md5_hash = None
+                    
                     for link in links:
                         href = link.get('href', '')
                         
+                        # Look for MD5 hash in any URL parameter
+                        md5_match = re.search(r'md5=([a-f0-9]{32})', href)
+                        if md5_match and not md5_hash:
+                            md5_hash = md5_match.group(1)
+                            book_info['md5'] = md5_hash
+                        
                         # Look for different types of download links
-                        if '/ads.php?md5=' in href:
-                            # LibGen mirror 1 (ads.php)
-                            md5_match = re.search(r'md5=([a-f0-9]{32})', href)
-                            if md5_match:
-                                book_info['md5'] = md5_match.group(1)
-                                book_info['mirrors'].append({
-                                    'url': urljoin(base_url, href),
-                                    'type': 'libgen_mirror_1',
-                                    'name': 'LibGen Mirror 1'
-                                })
+                        if '/ads.php?md5=' in href or 'md5=' in href:
+                            # LibGen mirror with MD5
+                            book_info['mirrors'].append({
+                                'url': urljoin(base_url, href),
+                                'type': 'libgen_mirror_1',
+                                'name': 'LibGen Mirror 1'
+                            })
                                 
                         elif 'randombook.org' in href:
                             # RandomBook mirror
@@ -218,10 +224,22 @@ class LibGenSearcher:
                                 'name': "Anna's Archive"
                             })
                     
+                    # If no MD5 found in links, try to extract from other sources
+                    if not md5_hash:
+                        # Check if MD5 is in any cell content or data attributes
+                        for cell in cells:
+                            cell_text = cell.get_text()
+                            cell_html = str(cell)
+                            md5_match = re.search(r'\b([a-f0-9]{32})\b', cell_text + ' ' + cell_html)
+                            if md5_match:
+                                md5_hash = md5_match.group(1)
+                                book_info['md5'] = md5_hash
+                                break
+                    
                     # Clean up data
                     book_info = self._clean_book_info(book_info)
                     
-                    if book_info['title'] and book_info['author']:  # Must have title and author
+                    if book_info['title']:  # Must have title (author optional)
                         results.append(book_info)
                         
                 except Exception as e:
@@ -290,8 +308,78 @@ class LibGenSearcher:
             except Exception as e:
                 logger.warning(f"Failed to get download links from {mirror}: {str(e)}")
                 continue
+        
+        # Add additional direct sources
+        additional_links = await self._get_additional_download_sources(md5_hash)
+        download_links.extend(additional_links)
                 
         return download_links
+        
+    async def _get_additional_download_sources(self, md5_hash: str) -> List[Dict[str, str]]:
+        """Get additional download sources for a book using various methods."""
+        additional_links = []
+        
+        # Add Library.lol direct links
+        library_lol_links = [
+            f"http://library.lol/main/{md5_hash}",
+            f"https://library.lol/main/{md5_hash}",
+        ]
+        
+        for url in library_lol_links:
+            additional_links.append({
+                'url': url,
+                'type': 'library_lol',
+                'name': 'Library.lol',
+                'text': 'Library.lol Direct'
+            })
+        
+        # Add Anna's Archive links (Updated September 2025 - most reliable alternatives)
+        annas_archive_links = [
+            f"https://annas-archive.org/md5/{md5_hash}",
+            f"https://annas-archive.li/md5/{md5_hash}",
+            f"https://annas-archive.se/md5/{md5_hash}",
+        ]
+        
+        for url in annas_archive_links:
+            additional_links.append({
+                'url': url,
+                'type': 'annas_archive',
+                'name': "Anna's Archive",
+                'text': "Anna's Archive"
+            })
+        
+        # Add Z-Library links (Updated September 2025)
+        z_lib_links = [
+            f"https://z-library.sk/md5/{md5_hash}",
+        ]
+        
+        for url in z_lib_links:
+            additional_links.append({
+                'url': url,
+                'type': 'z_library',
+                'name': 'Z-Library',
+                'text': 'Z-Library'
+            })
+        
+        # Add direct LibGen mirror links (Updated September 2025 - most reliable mirrors)
+        libgen_direct_links = [
+            f"https://libgen.li/book/index.php?md5={md5_hash}",
+            f"https://libgen.la/book/index.php?md5={md5_hash}",
+            f"https://libgen.gl/book/index.php?md5={md5_hash}",
+            f"https://libgen.vg/book/index.php?md5={md5_hash}",
+            f"https://libgen.bz/book/index.php?md5={md5_hash}",
+            f"https://libgen.is/book/index.php?md5={md5_hash}",
+        ]
+        
+        for url in libgen_direct_links:
+            additional_links.append({
+                'url': url,
+                'type': 'libgen_direct',
+                'name': 'LibGen Direct',
+                'text': 'LibGen Mirror'
+            })
+        
+        return additional_links
         
     async def _get_final_download_links(self, mirror: str, md5_hash: str) -> List[Dict[str, str]]:
         """
