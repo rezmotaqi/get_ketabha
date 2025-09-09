@@ -5,6 +5,7 @@ A Telegram bot that searches LibGen sites for books and returns download links.
 """
 
 import logging
+import re
 import os
 from typing import Optional, List, Dict, Any
 from io import BytesIO
@@ -100,7 +101,9 @@ class TelegramLibGenBot:
     async def handle_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
         """Process search query and return results one by one."""
         # Send searching message
-        searching_msg = await update.message.reply_text(f"Searching for: '{query}'...")
+        searching_msg = await update.message.reply_text(
+            f"Searching for: '{query}'...\nCopy the links and paste into a browser"
+        )
         
         try:
             # Perform search
@@ -117,8 +120,11 @@ class TelegramLibGenBot:
                 )
                 return
                 
-            # Update search message with count
-            await searching_msg.edit_text(f"Found {len(results)} results for: '{query}'\nSending results...")
+            # Store results for callbacks and update search status
+            context.user_data['last_search_results'] = results
+            await searching_msg.edit_text(
+                f"Found {len(results)} results for: '{query}'\nSending results..."
+            )
             
             # Send each book result individually with download links
             for i, book in enumerate(results, 1):  # Return ALL results
@@ -145,39 +151,22 @@ class TelegramLibGenBot:
             message += f"<b>Author:</b> {author}\n"
             message += f"<b>Format:</b> {format_ext} | <b>Year:</b> {year}\n\n"
             
-            # Get download links
+            # Provide instruction and a button to get copyable links
             if md5_hash:
-                download_links = await self.searcher.get_download_links(md5_hash)
-                
-                if download_links:
-                    message += "<b>Download Links:</b>\n"
-                    for j, link in enumerate(download_links[:3], 1):  # Limit to 3 links per book
-                        link_name = link.get('name') or link.get('text') or f'Download {j}'
-                        link_url = link.get('url', '')
-                        if link_url:
-                            message += f"{j}. <a href='{link_url}'>{link_name}</a>\n"
-                    
-                    # Optionally send the actual file to ensure correct filename
-                    if self.send_document_enabled:
-                        best_link = self._select_best_link(download_links)
-                        if best_link and best_link.get('url'):
-                            await self._send_document_from_url(
-                                update,
-                                best_link.get('url', ''),
-                                referer=None,
-                                suggested_filename=best_link.get('filename')
-                            )
-                else:
-                    message += "No direct download links found.\n"
-                    message += f"MD5: <code>{md5_hash}</code>"
+                message += (
+                    "Tap the button below to get copyable links.\n"
+                    f"MD5: <code>{md5_hash}</code>"
+                )
             else:
                 message += "No download information available."
             
             # Send the individual book result
+            keyboard = [[InlineKeyboardButton("🔗 Links (copy)", callback_data=f"download_{index-1}")]]
             await update.message.reply_text(
                 message,
                 parse_mode='HTML',
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
             
         except Exception as e:
@@ -310,8 +299,50 @@ class TelegramLibGenBot:
         await query.answer()
         
         try:
-            # Extract book index from callback data
-            book_index = int(query.data.split('_')[1])
+            data = query.data or ""
+
+            # Handle copy link callbacks
+            if data.startswith('copy_'):
+                _, book_idx_str, link_idx_str = data.split('_', 2)
+                book_index = int(book_idx_str)
+                link_index = int(link_idx_str)
+
+                # Retrieve cached links or fetch if missing
+                results = context.user_data.get('last_search_results', [])
+                if not results or book_index >= len(results):
+                    await query.answer()
+                    await query.message.reply_text("❌ Search results expired. Please search again.")
+                    return
+                links_cache = context.user_data.get('download_links', {})
+                links_for_book = links_cache.get(book_index)
+                if not links_for_book:
+                    md5_hash = results[book_index].get('md5')
+                    if not md5_hash:
+                        await query.answer()
+                        await query.message.reply_text("❌ No MD5 found for this book.")
+                        return
+                    links_for_book = await self.searcher.get_download_links(md5_hash)
+                    links_cache[book_index] = links_for_book or []
+                    context.user_data['download_links'] = links_cache
+
+                if not links_for_book or link_index >= len(links_for_book):
+                    await query.answer()
+                    await query.message.reply_text("❌ Link not available.")
+                    return
+
+                url_to_copy = links_for_book[link_index].get('url', '')
+                await query.answer("Sent link")
+                if url_to_copy:
+                    await query.message.reply_text(
+                        f"{url_to_copy}\n\nCopy the link and paste into a browser"
+                    )
+                return
+
+            # Extract book index from download callbacks
+            if not data.startswith('download_'):
+                await query.answer()
+                return
+            book_index = int(data.split('_')[1])
             
             # Get the book info from user data (stored during search)
             if 'last_search_results' not in context.user_data:
@@ -344,22 +375,31 @@ class TelegramLibGenBot:
                 )
                 return
                 
-            # Format download links message
+            # Cache links for this book
+            links_cache = context.user_data.get('download_links', {})
+            links_cache[book_index] = download_links
+            context.user_data['download_links'] = links_cache
+
+            # Format message without clickable URLs
             links_text = f"📚 **{book['title']}**\n"
             links_text += f"👤 Author: {book['author']}\n"
             links_text += f"📅 Year: {book['year']} | 💾 Size: {book['size']} | 📄 Format: {book['extension']}\n\n"
-            links_text += "🔗 **Download Links:**\n"
-            
-            for i, link in enumerate(download_links[:5], 1):  # Limit to 5 links
+            links_text += "🔗 **Download Links (use buttons to copy):**\n"
+            for i, link in enumerate(download_links[:5], 1):
                 link_name = link.get('name') or link.get('text') or 'Download'
-                links_text += f"{i}. [{link_name}]({link['url']})\n"
-                
-            links_text += f"\n🔍 MD5: `{md5_hash}`"
-            
+                links_text += f"{i}. {link_name}\n"
+            links_text += f"\n🔍 MD5: `{md5_hash}`\n\nCopy the links and paste into a browser"
+
+            # Build copy buttons
+            buttons = []
+            for i, _ in enumerate(download_links[:5]):
+                buttons.append([InlineKeyboardButton(f"Copy link {i+1}", callback_data=f"copy_{book_index}_{i}")])
+
             await query.edit_message_text(
                 links_text,
                 parse_mode='Markdown',
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup(buttons)
             )
             
         except Exception as e:
