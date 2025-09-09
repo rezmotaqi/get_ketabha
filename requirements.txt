@@ -5,7 +5,6 @@ python-telegram-bot==20.7
 aiohttp==3.9.1
 requests==2.31.0
 beautifulsoup4==4.12.2
-lxml==4.9.3
 
 # Environment variables
 python-dotenv==1.0.0
@@ -25,3 +24,6 @@ pytest-asyncio==0.21.1
 
 # Optional: for better performance with large HTML parsing
 html5lib==1.1
+
+# File handling and validation
+python-magic==0.4.27

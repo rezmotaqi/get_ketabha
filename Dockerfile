@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y \
     libxslt-dev \
     libffi-dev \
     libssl-dev \
+    libmagic1 \
+    libmagic-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
@@ -110,7 +112,8 @@ RUN apk add --no-cache \
     libffi-dev \
     openssl-dev \
     libxml2-dev \
-    libxslt-dev
+    libxslt-dev \
+    file-dev
 
 # Set working directory
 WORKDIR /app

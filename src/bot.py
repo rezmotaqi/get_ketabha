@@ -26,6 +26,7 @@ from telegram.request import HTTPXRequest
 from libgen_search import LibGenSearcher
 from utils.book_formatter import BookFormatter
 from utils.logger import setup_logger
+from utils.file_handler import FileHandler
 
 # Load environment variables
 load_dotenv()
@@ -44,6 +45,12 @@ class TelegramLibGenBot:
         
         # Load configuration from environment variables
         self._load_config()
+        
+        # Initialize file handler if file sending is enabled
+        if self.feature_send_files:
+            self.file_handler = FileHandler(self._get_file_config())
+        else:
+            self.file_handler = None
     
     def _load_config(self):
         """Load all configuration from environment variables."""
@@ -75,9 +82,21 @@ class TelegramLibGenBot:
         self.feature_alternative_search = os.getenv('FEATURE_ALTERNATIVE_SEARCH', 'true').lower() in ['true', '1', 'yes', 'on']
         self.feature_pagination = os.getenv('FEATURE_PAGINATION', 'true').lower() in ['true', '1', 'yes', 'on']
         self.feature_stop_command = os.getenv('FEATURE_STOP_COMMAND', 'true').lower() in ['true', '1', 'yes', 'on']
+        self.feature_send_files = os.getenv('FEATURE_SEND_FILES', 'false').lower() in ['true', '1', 'yes', 'on']
         
         # HTTP settings
         self.http_user_agent = os.getenv('HTTP_USER_AGENT', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36')
+    
+    def _get_file_config(self) -> Dict[str, Any]:
+        """Get file handling configuration."""
+        return {
+            'FILE_MIN_SIZE_MB': os.getenv('FILE_MIN_SIZE_MB', '0.1'),
+            'FILE_MAX_SIZE_MB': os.getenv('FILE_MAX_SIZE_MB', '50'),
+            'FILE_VALIDATION_TIMEOUT': os.getenv('FILE_VALIDATION_TIMEOUT', '30'),
+            'FILE_DOWNLOAD_TIMEOUT': os.getenv('FILE_DOWNLOAD_TIMEOUT', '60'),
+            'FILE_RETRY_ATTEMPTS': os.getenv('FILE_RETRY_ATTEMPTS', '2'),
+            'HTTP_USER_AGENT': self.http_user_agent
+        }
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
@@ -113,6 +132,7 @@ class TelegramLibGenBot:
             "✨ **Features:**\n"
             "🌍 Multiple download sources\n"
             "📥 Direct download links\n"
+            "📁 Send files directly (if enabled)\n"
             "📋 Book details (author, year, size, format)\n"
             "⚡ Fast paginated results\n\n"
             "⚠️ **Note:** This bot is for educational purposes only."
@@ -556,7 +576,7 @@ class TelegramLibGenBot:
         )
 
     async def show_download_links(self, query, context: ContextTypes.DEFAULT_TYPE, book: Dict[str, Any], book_idx: int) -> None:
-        """Show download links for a specific book."""
+        """Show download links or send files for a specific book."""
         title = book.get('title', 'Unknown Title')
         md5_hash = book.get('md5')
         
@@ -587,6 +607,76 @@ class TelegramLibGenBot:
             )
             return
         
+        # Check if file sending is enabled
+        if self.feature_send_files and self.file_handler:
+            await self._send_book_file(query, context, book, title, md5_hash)
+        else:
+            await self._show_download_links_only(query, context, book, title, md5_hash)
+    
+    async def _send_book_file(self, query, context: ContextTypes.DEFAULT_TYPE, book: Dict[str, Any], title: str, md5_hash: str) -> None:
+        """Send book file directly through Telegram."""
+        # Show downloading message
+        await query.edit_message_text(f"📁 Downloading file for: {title}...")
+        
+        try:
+            # Get download links
+            download_links = await asyncio.wait_for(
+                self.searcher.get_download_links(md5_hash), 
+                timeout=self.download_links_timeout
+            )
+            
+            if not download_links:
+                await query.edit_message_text(
+                    f"❌ No download links found for: {title}\n\n"
+                    f"You can try searching manually with MD5: `{md5_hash}`",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # Try to download and validate file
+            file_data = await self.file_handler.get_best_file_from_links(download_links, title)
+            
+            if file_data:
+                # Send file as document
+                await query.message.reply_document(
+                    document=file_data['data'],
+                    filename=file_data['filename'],
+                    caption=f"📚 **{title}**\n\n"
+                           f"👤 **Author:** {book.get('author', 'Unknown')}\n"
+                           f"📄 **Format:** {file_data['extension'].upper()}\n"
+                           f"💾 **Size:** {file_data['size']:,} bytes\n\n"
+                           f"✅ **File sent successfully!**"
+                )
+                
+                # Update the original message
+                await query.edit_message_text(
+                    f"✅ **File sent successfully!**\n\n"
+                    f"📚 **{title}**\n"
+                    f"📄 **Format:** {file_data['extension'].upper()}\n"
+                    f"💾 **Size:** {file_data['size']:,} bytes"
+                )
+            else:
+                # Fallback to showing links
+                await self._show_download_links_only(query, context, book, title, md5_hash)
+                
+        except asyncio.TimeoutError:
+            await query.edit_message_text(
+                f"⏰ Timeout downloading file for: {title}\n\n"
+                f"Falling back to download links..."
+            )
+            # Fallback to showing links
+            await self._show_download_links_only(query, context, book, title, md5_hash)
+        except Exception as e:
+            logger.error(f"Error sending file for {title}: {str(e)}")
+            await query.edit_message_text(
+                f"❌ Error downloading file for: {title}\n\n"
+                f"Falling back to download links..."
+            )
+            # Fallback to showing links
+            await self._show_download_links_only(query, context, book, title, md5_hash)
+    
+    async def _show_download_links_only(self, query, context: ContextTypes.DEFAULT_TYPE, book: Dict[str, Any], title: str, md5_hash: str) -> None:
+        """Show download links only (fallback method)."""
         # Show getting links message
         await query.edit_message_text(f"🔗 Getting download links for: {title}...")
         

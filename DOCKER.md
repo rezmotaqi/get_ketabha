@@ -111,6 +111,9 @@ docker-compose --profile dev --profile alpine --profile logging up -d
 | `BOT_BOOKS_PER_PAGE` | `3` | Books per page (Docker optimized) |
 | `LIBGEN_SEARCH_TIMEOUT` | `20` | Search timeout in seconds |
 | `BOT_DOWNLOAD_LINKS_TIMEOUT` | `8` | Download links timeout |
+| `FEATURE_SEND_FILES` | `false` | Enable file sending feature |
+| `FILE_MIN_SIZE_MB` | `0.1` | Minimum file size to send |
+| `FILE_MAX_SIZE_MB` | `50` | Maximum file size to send |
 | `HTTP_PROXY` | - | HTTP proxy URL (optional) |
 | `HTTPS_PROXY` | - | HTTPS proxy URL (optional) |
 

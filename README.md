@@ -8,6 +8,7 @@ A Telegram bot that searches LibGen sites for books and returns download links. 
 - 🌐 **Multiple Mirrors**: Automatically tries different LibGen mirrors for reliability
 - 📋 **Rich Results**: Displays book details including author, year, size, format, and pages
 - 🔗 **Direct Download Links**: Provides working download links from multiple sources
+- 📁 **File Sending**: Send book files directly through Telegram (optional)
 - ⚡ **Fast & Reliable**: Asynchronous processing for quick responses
 - 🎯 **User Friendly**: Simple commands and intuitive interface
 - 📝 **Detailed Logging**: Comprehensive logging for debugging and monitoring
@@ -139,6 +140,61 @@ You can search in multiple ways:
 - `machine learning`
 - `JavaScript: The Good Parts`
 
+## File Sending Feature 📁
+
+The bot can send book files directly through Telegram instead of just providing download links. This feature is disabled by default but can be enabled via environment variables.
+
+### Enable File Sending
+
+Add these variables to your `.env` file:
+
+```env
+# Enable file sending feature
+FEATURE_SEND_FILES=true
+
+# File size limits (in MB)
+FILE_MIN_SIZE_MB=0.1
+FILE_MAX_SIZE_MB=50
+
+# Download and validation timeouts (in seconds)
+FILE_DOWNLOAD_TIMEOUT=60
+FILE_VALIDATION_TIMEOUT=30
+
+# Retry attempts for failed downloads
+FILE_RETRY_ATTEMPTS=2
+```
+
+### How It Works
+
+1. **Search for books** as usual
+2. **Click "Links" button** for any book
+3. **Bot downloads and validates** the file automatically
+4. **File is sent directly** through Telegram if valid
+5. **Falls back to links** if file download/validation fails
+
+### File Validation
+
+The bot validates files before sending:
+- ✅ **File size** (minimum 0.1MB, maximum 50MB)
+- ✅ **File format** (PDF, EPUB, MOBI, etc.)
+- ✅ **File integrity** (not corrupted)
+- ✅ **MIME type** verification
+
+### Supported Formats
+
+- **PDF** - `.pdf`
+- **EPUB** - `.epub`
+- **MOBI** - `.mobi`
+- **AZW3** - `.azw3`
+- **DJVU** - `.djvu`
+- **TXT** - `.txt`
+- **DOC/DOCX** - `.doc`, `.docx`
+- **RTF** - `.rtf`
+- **FB2** - `.fb2`
+- **LIT** - `.lit`
+- **PDB** - `.pdb`
+- **CHM** - `.chm`
+
 ## Configuration Options ⚙️
 
 ### Environment Variables
@@ -152,6 +208,9 @@ You can search in multiple ways:
 | `MAX_RETRIES` | Maximum retry attempts for failed requests | 3 |
 | `MAX_RESULTS_PER_MESSAGE` | Results shown per message | 5 |
 | `REQUESTS_PER_SECOND` | Rate limiting for requests | 2 |
+| `FEATURE_SEND_FILES` | Enable sending files directly | false |
+| `FILE_MIN_SIZE_MB` | Minimum file size to send | 0.1 |
+| `FILE_MAX_SIZE_MB` | Maximum file size to send | 50 |
 
 ### LibGen Mirrors
 
