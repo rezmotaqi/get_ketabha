@@ -19,7 +19,7 @@ git clone <repository-url>
 cd get_ketabha
 
 # Copy environment template
-cp docker.env .env
+cp env.template .env
 
 # Edit .env file with your bot token
 nano .env

@@ -27,7 +27,7 @@ A Telegram bot that searches LibGen sites for books and returns download links. 
 
 3. **Configure the bot**
    ```bash
-   cp .env.template .env
+   cp env.template .env
    # Edit .env and add your Telegram Bot Token
    ```
 
@@ -59,7 +59,7 @@ pip install -r requirements.txt
 Copy the template and edit it:
 
 ```bash
-cp .env.template .env
+cp env.template .env
 ```
 
 Edit `.env` file:
@@ -94,12 +94,10 @@ telegram-libgen-bot/
 │       ├── __init__.py
 │       ├── book_formatter.py  # Message formatting
 │       └── logger.py          # Logging utilities
-├── config/                    # Configuration files
 ├── logs/                      # Log files (created automatically)
-├── data/                      # Data storage (created automatically)
 ├── main.py                    # Entry point
 ├── requirements.txt           # Python dependencies
-├── .env.template             # Environment variables template
+├── env.template              # Environment variables template
 ├── .env                      # Your actual environment variables (gitignored)
 ├── .gitignore               # Git ignore rules
 └── README.md               # This file

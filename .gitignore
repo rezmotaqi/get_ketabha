@@ -1,5 +1,6 @@
-# Environment variables
-.env
+# =============================================================================
+# Git Ignore File for Telegram LibGen Bot
+# =============================================================================
 
 # Python
 __pycache__/
@@ -19,41 +20,10 @@ parts/
 sdist/
 var/
 wheels/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
 
 # Virtual environments
 venv/
@@ -63,7 +33,16 @@ env.bak/
 venv.bak/
 .venv/
 
-# IDEs
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# IDE
 .vscode/
 .idea/
 *.swp
@@ -79,22 +58,73 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Logs
-logs/
-*.log
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
 
-# Data files
-data/
-*.db
-*.sqlite
-*.sqlite3
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
 
 # Temporary files
+*.tmp
+*.temp
 temp/
 tmp/
-*.tmp
 
-# Bot-specific
-downloads/
-cache/
-sessions/
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Docker
+.dockerignore
+
+# Development files
+dev/
+development/
+test_*.py
+*_test.py
+tests/
+
+# Documentation build
+docs/_build/

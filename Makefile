@@ -139,7 +139,7 @@ setup:
 	@echo "Setting up environment..."
 	@if [ ! -f .env ]; then \
 		echo "Creating .env file from template..."; \
-		cp docker.env .env; \
+		cp env.template .env; \
 		echo "Please edit .env file and set your TELEGRAM_BOT_TOKEN"; \
 	else \
 		echo ".env file already exists"; \

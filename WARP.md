@@ -20,7 +20,7 @@ python src/bot.py  # Direct execution with console logs
 pip install -r requirements.txt
 
 # Set up environment (copy and edit)
-cp .env.template .env
+cp env.template .env
 
 # Test search functionality independently
 python src/libgen_search.py
