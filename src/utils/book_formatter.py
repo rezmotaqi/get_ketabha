@@ -175,6 +175,7 @@ class BookFormatter:
             url = link.get('url', '')
             text = link.get('text', f'Download {i}')
             mirror = link.get('mirror', '')
+            filename = link.get('filename')
             
             # Clean up link text
             clean_text = self._clean_link_text(text)
@@ -183,8 +184,14 @@ class BookFormatter:
             if mirror:
                 mirror_name = self._extract_domain_name(mirror)
                 clean_text += f" ({mirror_name})"
+            
+            # Prefer showing filename if available
+            if filename:
+                display_text = f"{clean_text} - {filename}"
+            else:
+                display_text = clean_text
                 
-            formatted_links.append(f"🔸 <a href='{url}'>{clean_text}</a>")
+            formatted_links.append(f"🔸 <a href='{url}'>{display_text}</a>")
             
         return '\n'.join(formatted_links)
         
