@@ -7,6 +7,8 @@ A Telegram bot that searches LibGen sites for books and returns download links.
 import logging
 import os
 from typing import Optional, List, Dict, Any
+from io import BytesIO
+import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
@@ -37,6 +39,14 @@ class TelegramLibGenBot:
         self.token = token
         self.searcher = LibGenSearcher()
         self.formatter = BookFormatter()
+        # Optional: send files directly as Telegram documents (ensures proper filename)
+        send_doc_env = os.getenv('TELEGRAM_SEND_DOCUMENT', 'false').strip().lower()
+        self.send_document_enabled = send_doc_env in ['1', 'true', 'yes', 'on']
+        # Max download size in MB when sending as document
+        try:
+            self.max_download_mb = float(os.getenv('TELEGRAM_MAX_DOWNLOAD_MB', '50'))
+        except ValueError:
+            self.max_download_mb = 50.0
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
@@ -146,6 +156,17 @@ class TelegramLibGenBot:
                         link_url = link.get('url', '')
                         if link_url:
                             message += f"{j}. <a href='{link_url}'>{link_name}</a>\n"
+                    
+                    # Optionally send the actual file to ensure correct filename
+                    if self.send_document_enabled:
+                        best_link = self._select_best_link(download_links)
+                        if best_link and best_link.get('url'):
+                            await self._send_document_from_url(
+                                update,
+                                best_link.get('url', ''),
+                                referer=None,
+                                suggested_filename=best_link.get('filename')
+                            )
                 else:
                     message += "No direct download links found.\n"
                     message += f"MD5: <code>{md5_hash}</code>"
@@ -164,6 +185,116 @@ class TelegramLibGenBot:
             # Send simplified version on error
             simple_message = f"{index}. {book.get('title', 'Unknown')}\nAuthor: {book.get('author', 'Unknown')}\nFormat: {book.get('extension', 'Unknown')}"
             await update.message.reply_text(simple_message)
+
+    def _select_best_link(self, links: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Select the best download link to send as a document."""
+        if not links:
+            return None
+        # Prefer direct mirror or resolved direct download with filename
+        def link_score(link: Dict[str, Any]) -> int:
+            score = 0
+            link_type = link.get('type', '')
+            if link_type in ['direct_mirror', 'direct_download']:
+                score += 2
+            if link.get('filename'):
+                score += 1
+            return score
+        return sorted(links, key=link_score, reverse=True)[0]
+
+    async def _send_document_from_url(self, update: Update, url: str, referer: Optional[str] = None, suggested_filename: Optional[str] = None) -> None:
+        """Download a file from URL (with size cap) and send as Telegram document with proper filename."""
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36'
+        }
+        if referer:
+            headers['Referer'] = referer
+        timeout = aiohttp.ClientTimeout(total=60)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                # HEAD first to get metadata
+                filename = suggested_filename
+                content_length = None
+                content_type = None
+                try:
+                    async with session.head(url, headers=headers, allow_redirects=True) as head_resp:
+                        content_type = head_resp.headers.get('Content-Type')
+                        content_length = head_resp.headers.get('Content-Length')
+                        disposition = head_resp.headers.get('Content-Disposition', '')
+                        if not filename and disposition:
+                            filename = self._extract_filename_from_disposition(disposition)
+                except Exception:
+                    pass
+                # Size guard
+                try:
+                    if content_length:
+                        size_mb = int(content_length) / (1024 * 1024)
+                        if size_mb > self.max_download_mb:
+                            await update.message.reply_text(
+                                f"File is too large to send as document (~{size_mb:.1f} MB). Download via link above."
+                            )
+                            return
+                except Exception:
+                    pass
+                # Download
+                async with session.get(url, headers=headers, allow_redirects=True) as get_resp:
+                    final_url = str(get_resp.url)
+                    if not filename:
+                        disposition = get_resp.headers.get('Content-Disposition', '')
+                        if disposition:
+                            filename = self._extract_filename_from_disposition(disposition)
+                    if not filename:
+                        filename = self._infer_filename_from_url(final_url) or 'file'
+                    # Stream into memory (bounded by max_download_mb)
+                    max_bytes = int(self.max_download_mb * 1024 * 1024)
+                    buffer = BytesIO()
+                    downloaded = 0
+                    async for chunk in get_resp.content.iter_chunked(1024 * 64):
+                        if not chunk:
+                            continue
+                        buffer.write(chunk)
+                        downloaded += len(chunk)
+                        if downloaded > max_bytes:
+                            await update.message.reply_text(
+                                "Download exceeded size limit; please use the link above."
+                            )
+                            return
+                    buffer.seek(0)
+                    await update.message.reply_document(
+                        document=buffer,
+                        filename=filename,
+                        caption=f"📄 {filename}"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to send document from URL {url}: {e}")
+            # Silent failure; links are still provided
+
+    def _extract_filename_from_disposition(self, content_disposition: str) -> Optional[str]:
+        if not content_disposition:
+            return None
+        match_ext = re.search(r"filename\*=(?:UTF-8''|)\s*([^;]+)", content_disposition, flags=re.IGNORECASE)
+        if match_ext:
+            try:
+                from urllib.parse import unquote
+                return unquote(match_ext.group(1).strip('"'))
+            except Exception:
+                return match_ext.group(1).strip('"')
+        match = re.search(r'filename="?([^";]+)"?', content_disposition, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return None
+
+    def _infer_filename_from_url(self, url: str) -> Optional[str]:
+        try:
+            from urllib.parse import urlparse, unquote
+            import os as _os
+            path = urlparse(url).path
+            if not path:
+                return None
+            name = _os.path.basename(path)
+            name = unquote(name)
+            return name if name else None
+        except Exception:
+            return None
             
     def create_download_keyboard(self, results: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
         """Create inline keyboard with download buttons."""
