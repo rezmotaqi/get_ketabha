@@ -46,12 +46,11 @@ RUN pip install -r requirements.txt
 # Copy source code
 COPY . .
 
-# Create logs directory
-RUN mkdir -p logs
-
-# Create non-root user
+# Create non-root user first
 RUN groupadd -r botuser && useradd -r -g botuser botuser
-RUN chown -R botuser:botuser /app
+
+# Create logs directory and set proper permissions
+RUN mkdir -p logs && chown -R botuser:botuser /app
 USER botuser
 
 # Expose port (if needed for health checks)
@@ -78,12 +77,11 @@ RUN pip install --upgrade pip && \
 # Copy source code
 COPY . .
 
-# Create logs directory
-RUN mkdir -p logs
-
 # Create non-root user for security
 RUN groupadd -r botuser && useradd -r -g botuser botuser
-RUN chown -R botuser:botuser /app
+
+# Create logs directory and set proper permissions
+RUN mkdir -p logs && chown -R botuser:botuser /app
 USER botuser
 
 # Health check
@@ -126,13 +124,12 @@ RUN pip install --upgrade pip && \
 # Copy source code
 COPY . .
 
-# Create logs directory
-RUN mkdir -p logs
-
 # Create non-root user
 RUN addgroup -g 1000 botuser && \
     adduser -D -s /bin/sh -u 1000 -G botuser botuser
-RUN chown -R botuser:botuser /app
+
+# Create logs directory and set proper permissions
+RUN mkdir -p logs && chown -R botuser:botuser /app
 USER botuser
 
 # Health check

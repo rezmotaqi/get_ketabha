@@ -49,34 +49,42 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
     console_handler.setFormatter(simple_formatter)
     logger.addHandler(console_handler)
     
-    # File handler (if logs directory exists)
+    # File handler (if logs directory exists and is writable)
     logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'logs')
-    if os.path.exists(logs_dir):
+    if os.path.exists(logs_dir) and os.access(logs_dir, os.W_OK):
         log_file = os.path.join(logs_dir, 'bot.log')
         
-        # Rotating file handler (max 10MB, keep 5 backups)
-        file_handler = RotatingFileHandler(
-            log_file, 
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(detailed_formatter)
-        logger.addHandler(file_handler)
+        try:
+            # Rotating file handler (max 10MB, keep 5 backups)
+            file_handler = RotatingFileHandler(
+                log_file, 
+                maxBytes=10*1024*1024,  # 10MB
+                backupCount=5,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(detailed_formatter)
+            logger.addHandler(file_handler)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Could not create file handler for {log_file}: {e}")
+    else:
+        logger.warning(f"Logs directory {logs_dir} does not exist or is not writable")
     
     # Error file handler for errors and above
-    if os.path.exists(logs_dir):
+    if os.path.exists(logs_dir) and os.access(logs_dir, os.W_OK):
         error_file = os.path.join(logs_dir, 'errors.log')
-        error_handler = RotatingFileHandler(
-            error_file,
-            maxBytes=5*1024*1024,  # 5MB
-            backupCount=3,
-            encoding='utf-8'
-        )
-        error_handler.setLevel(logging.ERROR)
-        error_handler.setFormatter(detailed_formatter)
-        logger.addHandler(error_handler)
+        try:
+            error_handler = RotatingFileHandler(
+                error_file,
+                maxBytes=5*1024*1024,  # 5MB
+                backupCount=3,
+                encoding='utf-8'
+            )
+            error_handler.setLevel(logging.ERROR)
+            error_handler.setFormatter(detailed_formatter)
+            logger.addHandler(error_handler)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Could not create error file handler for {error_file}: {e}")
     
     return logger
 
