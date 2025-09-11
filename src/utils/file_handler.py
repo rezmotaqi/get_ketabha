@@ -15,7 +15,7 @@ import logging
 from urllib.parse import urlparse, unquote
 import re
 
-from utils.logger import setup_logger
+from .logger import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -107,7 +107,12 @@ class FileHandler:
             'Connection': 'keep-alive'
         }
         
-        timeout = aiohttp.ClientTimeout(total=self.download_timeout)
+        # Use more granular timeouts for large files
+        timeout = aiohttp.ClientTimeout(
+            total=self.download_timeout * 3,  # Total time: 3x configured timeout
+            sock_read=30,                     # 30 seconds between chunks
+            sock_connect=10                   # 10 seconds to establish connection
+        )
         
         for attempt in range(self.retry_attempts):
             try:
@@ -131,15 +136,36 @@ class FileHandler:
                                 logger.warning(f"File too large: {size} bytes > {self.max_size_bytes} bytes")
                                 return None
                         
-                        # Download content
+                        # Download content with percentage display
                         content = BytesIO()
                         downloaded = 0
+                        
+                        # Get total size for percentage calculation
+                        content_length = response.headers.get('Content-Length')
+                        total_size = int(content_length) if content_length else None
+                        
+                        # Track percentage reporting
+                        last_reported_percent = -1
                         
                         async for chunk in response.content.iter_chunked(8192):
                             if not chunk:
                                 continue
                             content.write(chunk)
                             downloaded += len(chunk)
+                            
+                            # Show percentage progress (more frequent for large files)
+                            if total_size:
+                                current_percent = int((downloaded / total_size) * 100)
+                                if current_percent != last_reported_percent and current_percent % 5 == 0:
+                                    size_mb = downloaded / (1024 * 1024)
+                                    total_mb = total_size / (1024 * 1024)
+                                    print(f"📊 Download progress: {current_percent}% ({size_mb:.1f}MB / {total_mb:.1f}MB)")
+                                    last_reported_percent = current_percent
+                            else:
+                                # If no total size, show downloaded amount every 2MB
+                                if downloaded % (2 * 1024 * 1024) == 0:
+                                    size_mb = downloaded / (1024 * 1024)
+                                    print(f"📊 Downloaded: {size_mb:.1f}MB")
                             
                             # Check size during download
                             if downloaded > self.max_size_bytes:
@@ -157,6 +183,11 @@ class FileHandler:
                         
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout downloading {url} (attempt {attempt + 1})")
+                if attempt < self.retry_attempts - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+            except aiohttp.ClientError as e:
+                logger.warning(f"Connection error downloading {url} (attempt {attempt + 1}): {str(e)}")
                 if attempt < self.retry_attempts - 1:
                     await asyncio.sleep(2 ** attempt)
                     continue
@@ -330,6 +361,7 @@ class FileHandler:
         sorted_links = sorted(download_links, key=lambda x: self._get_link_priority(x))
         
         logger.info(f"Trying to download file from {len(sorted_links)} links")
+        print(f"📥 Starting download process for {len(sorted_links)} available links...")
         
         for i, link in enumerate(sorted_links):
             try:
@@ -338,6 +370,7 @@ class FileHandler:
                     continue
                 
                 logger.info(f"Attempting download {i+1}/{len(sorted_links)}: {url}")
+                print(f"🔗 Attempting download {i+1}/{len(sorted_links)}: {url[:80]}...")
                 
                 # Generate expected filename
                 expected_filename = None
@@ -351,6 +384,7 @@ class FileHandler:
                 file_data = await self.download_and_validate_file(url, expected_filename)
                 if file_data:
                     logger.info(f"Successfully downloaded and validated file: {file_data['filename']}")
+                    print(f"✅ Successfully downloaded: {file_data['filename']} ({file_data['size']} bytes)")
                     return file_data
                 else:
                     logger.warning(f"Failed to download/validate file from: {url}")

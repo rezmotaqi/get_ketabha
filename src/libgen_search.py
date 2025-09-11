@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 import re
 import os
+import time
 from typing import List, Dict, Any, Optional
 from urllib.parse import quote, urljoin
 from bs4 import BeautifulSoup
@@ -15,6 +16,7 @@ import logging
 from dotenv import load_dotenv
 
 from utils.logger import setup_logger
+from utils.http_client import get_http_client, record_request_performance
 
 # Load environment variables
 load_dotenv()
@@ -44,14 +46,31 @@ class LibGenSearcher:
         resolve_env = os.getenv('LIBGEN_RESOLVE_FINAL_URLS', 'true').strip().lower()
         self.resolve_final_urls = resolve_env in ['1', 'true', 'yes', 'on']
         
+        # Initialize optimized HTTP client
+        self.http_client = get_http_client()
+        
+        # Performance tracking
+        self.search_stats = {
+            'total_searches': 0,
+            'successful_searches': 0,
+            'failed_searches': 0,
+            'average_search_time': 0.0,
+            'mirror_performance': {}
+        }
+        
+        # Simple in-memory cache for search results (TTL: 5 minutes)
+        self.search_cache = {}
+        self.cache_ttl = 300  # 5 minutes
+        
         logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors (Comprehensive Sep 2025): {', '.join(self.libgen_mirrors)}")
         logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors (Comprehensive Sep 2025): {', '.join(self.download_mirrors)}")
         logger.info(f"Resolve final download URLs: {self.resolve_final_urls}")
         logger.info("Includes: Active mirrors, Russian LibGen mirrors, Anna's Archive, Z-Library, CyberLeninka")
+        logger.info("Performance optimizations: Connection pooling, caching, performance tracking enabled")
         
     async def search(self, query: str, max_results: int = None) -> List[Dict[str, Any]]:
         """
-        Search for books across LibGen mirrors.
+        Search for books across LibGen mirrors with caching and performance optimization.
         
         Args:
             query: Search query (title, author, ISBN, etc.)
@@ -64,21 +83,65 @@ class LibGenSearcher:
         if max_results is None:
             max_results = int(os.getenv('LIBGEN_MAX_RESULTS', '200'))
             
+        # Check cache first
+        cache_key = f"{query.lower().strip()}:{max_results}"
+        current_time = time.time()
+        
+        if cache_key in self.search_cache:
+            cached_data, cache_time = self.search_cache[cache_key]
+            if current_time - cache_time < self.cache_ttl:
+                logger.info(f"Cache hit for query: {query}")
+                return cached_data
+            else:
+                # Remove expired cache entry
+                del self.search_cache[cache_key]
+        
+        # Track search performance
+        start_time = time.time()
+        self.search_stats['total_searches'] += 1
+        
         logger.info(f"Searching for: {query}")
         
         results = []
         
-        # Try each mirror once until we get results
+        # Search all mirrors in parallel to get maximum results
+        search_tasks = []
         for mirror in self.libgen_mirrors:
+            task = asyncio.create_task(self._search_mirror_async(mirror, query))
+            search_tasks.append((task, mirror))
+        
+        # Wait for all searches to complete
+        for task, mirror in search_tasks:
             try:
-                logger.info(f"Attempting search on mirror: {mirror}")
-                mirror_results = await self._search_mirror(mirror, query, max_results)
+                mirror_start = time.time()
+                mirror_results = await task
+                mirror_time = time.time() - mirror_start
+                
+                # Track mirror performance
+                if mirror not in self.search_stats['mirror_performance']:
+                    self.search_stats['mirror_performance'][mirror] = {
+                        'total_requests': 0,
+                        'successful_requests': 0,
+                        'average_response_time': 0.0
+                    }
+                
+                mirror_stats = self.search_stats['mirror_performance'][mirror]
+                mirror_stats['total_requests'] += 1
+                
                 if mirror_results:
+                    mirror_stats['successful_requests'] += 1
+                    # Update average response time
+                    current_avg = mirror_stats['average_response_time']
+                    total_successful = mirror_stats['successful_requests']
+                    mirror_stats['average_response_time'] = (
+                        (current_avg * (total_successful - 1) + mirror_time) / total_successful
+                    )
+                    
                     results.extend(mirror_results)
-                    logger.info(f"Found {len(mirror_results)} results from {mirror}")
-                    break
+                    logger.info(f"Found {len(mirror_results)} results from {mirror} in {mirror_time:.2f}s")
+                    record_request_performance(f"search_mirror:{mirror}", mirror_time)
                 else:
-                    logger.info(f"No results from {mirror}, trying next mirror")
+                    logger.info(f"No results from {mirror}")
                     
             except Exception as e:
                 logger.warning(f"Failed to search {mirror}: {str(e)}")
@@ -86,10 +149,88 @@ class LibGenSearcher:
                 
         # Remove duplicates based on MD5 hash
         unique_results = self._remove_duplicates(results)
+        final_results = unique_results[:max_results]
         
-        logger.info(f"Total unique results: {len(unique_results)}")
-        return unique_results[:max_results]
+        # Log comprehensive search results
+        total_found = len(results)
+        unique_found = len(unique_results)
+        returned = len(final_results)
+        search_time = time.time() - start_time
         
+        logger.info(f"Total results found: {total_found} from {len(self.libgen_mirrors)} mirrors")
+        logger.info(f"Unique results after deduplication: {unique_found}")
+        logger.info(f"Results returned: {returned} (limited by max_results={max_results})")
+        logger.info(f"Search completed in {search_time:.2f}s for query: '{query}'")
+        
+        # Update performance stats
+        total_time = time.time() - start_time
+        if final_results:
+            self.search_stats['successful_searches'] += 1
+        else:
+            self.search_stats['failed_searches'] += 1
+            
+        # Update average search time
+        total_searches = self.search_stats['total_searches']
+        current_avg = self.search_stats['average_search_time']
+        self.search_stats['average_search_time'] = (
+            (current_avg * (total_searches - 1) + total_time) / total_searches
+        )
+        
+        # Cache the results
+        self.search_cache[cache_key] = (final_results, current_time)
+        
+        # Clean up old cache entries
+        self._cleanup_cache()
+        
+        logger.info(f"Total unique results: {len(final_results)} (search time: {total_time:.2f}s)")
+        record_request_performance(f"search:{query}", total_time)
+        
+        return final_results
+    
+    def _cleanup_cache(self):
+        """Remove expired cache entries."""
+        current_time = time.time()
+        expired_keys = [
+            key for key, (_, cache_time) in self.search_cache.items()
+            if current_time - cache_time > self.cache_ttl
+        ]
+        for key in expired_keys:
+            del self.search_cache[key]
+        
+        if expired_keys:
+            logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
+        
+    async def _search_mirror_async(self, mirror: str, query: str) -> List[Dict[str, Any]]:
+        """Search a specific LibGen mirror asynchronously."""
+        search_url = f"{mirror}/index.php"
+        params = {
+            'req': query,
+            'columns[]': ['t', 'a', 's', 'y', 'p', 'i'],  # Title, Author, Series, Year, Publisher, ISBN
+            'objects[]': ['f', 'e', 's', 'a', 'p', 'w'],  # Files, Editions, Series, Authors, Publishers, Works
+            'topics[]': ['l', 'c', 'f', 'a', 'm', 'r', 's'],  # All topics
+            'res': str(int(os.getenv('LIBGEN_MIRROR_REQUEST_LIMIT', '1000'))),  # Search all available results
+            'filesuns': 'all',
+            'curtab': 'f'  # Files tab
+        }
+        
+        # Use optimized HTTP client
+        for attempt in range(self.max_retries):
+            try:
+                response = self.http_client.get(search_url, params=params)
+                if response.status_code == 200:
+                    html = response.text
+                    return self._parse_search_results(html, mirror)
+                else:
+                    logger.warning(f"HTTP {response.status_code} from {mirror}")
+                    
+            except Exception as e:
+                logger.warning(f"Request error on attempt {attempt + 1} for {mirror}: {str(e)}")
+                
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(1)  # Brief delay before retry
+                    
+        return []
+
     async def _search_mirror(self, mirror: str, query: str, max_results: int) -> List[Dict[str, Any]]:
         """Search a specific LibGen mirror using the correct index.php pattern."""
         search_url = f"{mirror}/index.php"
@@ -98,38 +239,26 @@ class LibGenSearcher:
             'columns[]': ['t', 'a', 's', 'y', 'p', 'i'],  # Title, Author, Series, Year, Publisher, ISBN
             'objects[]': ['f', 'e', 's', 'a', 'p', 'w'],  # Files, Editions, Series, Authors, Publishers, Works
             'topics[]': ['l', 'c', 'f', 'a', 'm', 'r', 's'],  # All topics
-            'res': str(min(max_results, int(os.getenv('LIBGEN_MIRROR_REQUEST_LIMIT', '300')))),
+            'res': str(int(os.getenv('LIBGEN_MIRROR_REQUEST_LIMIT', '1000'))),  # Search all available results
             'filesuns': 'all',
             'curtab': 'f'  # Files tab
         }
         
-        # Configure proxy if available
-        proxy = os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY')
-        
-        connector = None
-        if proxy:
-            connector = aiohttp.TCPConnector()
-            
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=self.timeout),
-            connector=connector
-        ) as session:
-            for attempt in range(self.max_retries):
-                try:
-                    async with session.get(search_url, params=params, proxy=proxy) as response:
-                        if response.status == 200:
-                            html = await response.text()
-                            return self._parse_search_results(html, mirror)
-                        else:
-                            logger.warning(f"HTTP {response.status} from {mirror}")
-                            
-                except asyncio.TimeoutError:
-                    logger.warning(f"Timeout on attempt {attempt + 1} for {mirror}")
-                except Exception as e:
-                    logger.warning(f"Request error on attempt {attempt + 1} for {mirror}: {str(e)}")
+        # Use optimized HTTP client
+        for attempt in range(self.max_retries):
+            try:
+                response = self.http_client.get(search_url, params=params)
+                if response.status_code == 200:
+                    html = response.text
+                    return self._parse_search_results(html, mirror)
+                else:
+                    logger.warning(f"HTTP {response.status_code} from {mirror}")
                     
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(1)  # Brief delay before retry
+            except Exception as e:
+                logger.warning(f"Request error on attempt {attempt + 1} for {mirror}: {str(e)}")
+                
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(1)  # Brief delay before retry
                     
         return []
         

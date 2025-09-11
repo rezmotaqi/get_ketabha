@@ -6,7 +6,7 @@ Formats book information for display in Telegram messages.
 
 import re
 from typing import List, Dict, Any
-from utils.logger import setup_logger
+from .logger import setup_logger
 
 logger = setup_logger(__name__)
 
