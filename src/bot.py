@@ -74,15 +74,23 @@ class TelegramLibGenBot:
         
         # Initialize metrics integration
         try:
-            from monitoring import get_metrics, start_metrics_server
-            self.metrics = get_metrics()
-            # Start metrics server on port 8000
-            start_metrics_server(port=8000)
-            self.metrics.record_system_status("bot", "initialized")
-            logger.info("✅ Metrics integration initialized and server started on port 8000")
+            from monitoring import initialize_metrics
+            # Initialize metrics and start server
+            if initialize_metrics(port=8000):
+                # Get the metrics integration instance
+                from monitoring import get_metrics_integration
+                self.metrics_integration = get_metrics_integration()
+                self.metrics = self.metrics_integration.metrics
+                self.metrics.record_system_status("bot", "initialized")
+                logger.info("✅ Metrics integration fully initialized and server started on port 8000")
+            else:
+                logger.error("❌ Failed to initialize metrics system")
+                self.metrics = None
+                self.metrics_integration = None
         except Exception as e:
             logger.warning(f"⚠️ Metrics integration not available: {e}")
             self.metrics = None
+            self.metrics_integration = None
             
         # Performance tracking
         self.search_stats = {
@@ -287,6 +295,8 @@ class TelegramLibGenBot:
             self.metrics.record_user_info(str(user_id), username, "telegram_user", "search_request")
             self.metrics.record_user_activity_detailed(str(user_id), username, "search", query)
             self.metrics.record_user_query_length(str(user_id), username, len(query))
+            # Record search request start
+            self.metrics.record_search_request("book_search", "started", 0.0, 0)
         
         # Clear any previous stop flag
         context.user_data.pop('stop_search', None)
@@ -304,6 +314,9 @@ class TelegramLibGenBot:
     
     async def _process_search_background(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, searching_msg, start_time: float, user_id: str) -> None:
         """Process search in background to allow true concurrency."""
+        # Get username for metrics
+        username = update.effective_user.username if update.effective_user and update.effective_user.username else "NoUsername"
+        
         try:
             # Send searching message if not already sent
             if searching_msg is None:
@@ -354,6 +367,8 @@ class TelegramLibGenBot:
             if self.metrics:
                 self.metrics.record_user_response_time(str(user_id), username, "search", response_time)
                 self.metrics.record_system_status("search_engine", "success")
+                # Record successful search
+                self.metrics.record_search_request("book_search", "success", response_time, len(results) if results else 0)
             
             if not results:
                 await searching_msg.edit_text(
@@ -392,6 +407,8 @@ class TelegramLibGenBot:
             if self.metrics:
                 self.metrics.record_user_response_time(str(user_id), username, "search_error", response_time)
                 self.metrics.record_system_status("search_engine", "error")
+                # Record failed search
+                self.metrics.record_search_request("book_search", "error", response_time, 0)
             
             await searching_msg.edit_text(
                 f"❌ Search failed for: '{query}'\n\n"

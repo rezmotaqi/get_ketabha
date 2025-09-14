@@ -54,6 +54,73 @@ Key metrics:
 - `active_users` - Number of active users
 - `errors_total` - Error counts by type
 
+## Dashboard Access
+
+### Prometheus UI
+**URL:** http://localhost:9090
+
+**Key Queries:**
+```promql
+# Search requests by status
+search_requests_total{status="success"}
+search_requests_total{status="started"}
+
+# User activity
+user_activity_by_type_total
+
+# System metrics
+memory_usage_bytes
+cpu_usage_percent
+system_status
+
+# Search performance
+search_duration_seconds
+search_results_count
+
+# Bot health
+up{job="libgen-bot"}
+```
+
+**Navigation:**
+- **Graph** - Query and visualize metrics
+- **Status → Targets** - Check bot connectivity
+- **Status → Rules** - View alerting rules
+- **Alerts** - View active alerts
+
+### Grafana Dashboard
+**URL:** http://localhost:3000
+**Login:** admin / admin123
+
+**Pre-configured Dashboards:**
+- **Telegram Bot Monitoring** - Main bot dashboard
+- **System Overview** - Server resources
+- **Search Analytics** - Search performance metrics
+- **User Activity** - User behavior analytics
+
+**Key Panels:**
+- Active Users Count
+- Search Requests Rate
+- Average Search Duration
+- Error Rates
+- Memory/CPU Usage
+- Response Time Percentiles
+
+### Task Dashboard
+**URL:** http://localhost:5000
+**Purpose:** Task management and monitoring
+
+### Quick Access Commands
+```bash
+# Check if services are running
+curl http://localhost:8000/metrics | head -10
+curl http://localhost:9090/api/v1/targets
+curl http://localhost:3000/api/health
+
+# Test specific metrics
+curl "http://localhost:9090/api/v1/query?query=search_requests_total"
+curl "http://localhost:9090/api/v1/query?query=up{job=\"libgen-bot\"}"
+```
+
 ## Architecture
 
 ```

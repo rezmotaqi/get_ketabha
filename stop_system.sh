@@ -67,10 +67,5 @@ if [ "$REMAINING" -gt 0 ]; then
     pkill -9 -f "http.server" 2>/dev/null || true
 fi
 
-# Clean up status file
-if [ -f "system_status.txt" ]; then
-    rm system_status.txt
-    print_status "✅ Status file cleaned up"
-fi
 
 print_status "🎉 All services stopped successfully!"

@@ -112,27 +112,6 @@ else
     print_warning "⚠️  Web server already running on port 8080"
 fi
 
-# Create system status file
-cat > system_status.txt << EOF
-Telegram LibGen Bot System Status
-================================
-Started: $(date)
-Bot PID: $BOT_PID
-Monitoring PID: $MONITORING_PID
-Web Server: Running on port 8080
-
-Access Points:
-- Bot: Running and processing requests
-- Monitoring: http://localhost:8000/metrics
-- Dashboard: http://localhost:8080/
-- Prometheus UI: http://localhost:8080/prometheus/
-- Grafana UI: http://localhost:8080/grafana/
-
-Log Files:
-- Bot: logs/bot.log
-- Monitoring: logs/monitoring.log
-- Web: logs/web.log
-EOF
 
 # Display final status
 echo ""

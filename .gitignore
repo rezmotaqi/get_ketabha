@@ -136,3 +136,4 @@ development/
 docs/_build/
 *nginx*
 
+system_status.txt

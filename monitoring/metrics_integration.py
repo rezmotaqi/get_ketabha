@@ -11,7 +11,7 @@ import logging
 from typing import Dict, Any, Optional
 from functools import wraps
 
-from .prometheus_metrics import get_metrics, track_request_lifecycle, track_async_request_lifecycle
+from .prometheus_metrics import get_metrics, track_async_request_lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,11 @@ class MetricsIntegration:
                 
                 # Update connection pool metrics (if available)
                 try:
-                    from .http_client import get_http_client
+                    # Try to get HTTP client from utils if available
+                    import sys
+                    import os
+                    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+                    from utils.http_client import get_http_client
                     http_client = get_http_client()
                     if hasattr(http_client, '_pool'):
                         pool = http_client._pool
@@ -380,15 +384,38 @@ async def example_tracked_download(file_url: str, file_type: str = "pdf"):
 def initialize_metrics(port: int = 8000):
     """Initialize the metrics system."""
     from .prometheus_metrics import start_metrics_server
+    import socket
+    
+    # Check if port is available
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('localhost', port))
+    except OSError as e:
+        if e.errno == 98:  # Address already in use
+            logger.warning(f"Port {port} is already in use. Metrics server may already be running.")
+        else:
+            logger.error(f"Port {port} is not available: {e}")
+            return False
     
     # Start metrics server
-    start_metrics_server(port)
+    try:
+        start_metrics_server(port)
+        logger.info(f"✅ Prometheus metrics server started on port {port}")
+    except Exception as e:
+        logger.error(f"❌ Failed to start metrics server: {e}")
+        return False
     
     # Start system metrics updates
-    integration = get_metrics_integration()
-    integration.start_system_metrics_updates()
+    try:
+        integration = get_metrics_integration()
+        integration.start_system_metrics_updates()
+        logger.info(f"✅ System metrics updates started")
+    except Exception as e:
+        logger.error(f"❌ Failed to start system metrics updates: {e}")
+        return False
     
-    logger.info(f"Metrics system initialized on port {port}")
+    logger.info(f"✅ Metrics system fully initialized on port {port}")
+    return True
 
 if __name__ == "__main__":
     # Example usage
