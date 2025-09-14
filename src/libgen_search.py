@@ -104,18 +104,47 @@ class LibGenSearcher:
         
         results = []
         
-        # Search all mirrors in parallel to get maximum results
+        # Search all mirrors in TRUE parallel using asyncio.gather
         search_tasks = []
         for mirror in self.libgen_mirrors:
             task = asyncio.create_task(self._search_mirror_async(mirror, query))
             search_tasks.append((task, mirror))
         
-        # Wait for all searches to complete
-        for task, mirror in search_tasks:
+        # Wait for ALL searches to complete in parallel
+        logger.info(f"🚀 Starting TRUE PARALLEL search across {len(self.libgen_mirrors)} mirrors...")
+        
+        # Use asyncio.gather to wait for all tasks simultaneously with timeout
+        try:
+            task_results = await asyncio.wait_for(
+                asyncio.gather(*[task for task, _ in search_tasks], return_exceptions=True),
+                timeout=30.0  # 30 second timeout for all mirrors
+            )
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ Search timeout - some mirrors may not have responded")
+            # Get partial results from completed tasks
+            task_results = []
+            for task, _ in search_tasks:
+                if task.done():
+                    try:
+                        result = task.result()
+                        task_results.append(result)
+                    except Exception as e:
+                        task_results.append(e)
+                else:
+                    task.cancel()
+                    task_results.append(Exception("Task cancelled due to timeout"))
+        
+        # Process results from all mirrors
+        for i, (task, mirror) in enumerate(search_tasks):
             try:
                 mirror_start = time.time()
-                mirror_results = await task
+                mirror_results = task_results[i]
                 mirror_time = time.time() - mirror_start
+                
+                # Handle exceptions
+                if isinstance(mirror_results, Exception):
+                    logger.warning(f"Failed to search {mirror}: {str(mirror_results)}")
+                    continue
                 
                 # Track mirror performance
                 if mirror not in self.search_stats['mirror_performance']:
@@ -138,13 +167,13 @@ class LibGenSearcher:
                     )
                     
                     results.extend(mirror_results)
-                    logger.info(f"Found {len(mirror_results)} results from {mirror} in {mirror_time:.2f}s")
+                    logger.info(f"✅ Found {len(mirror_results)} results from {mirror} in {mirror_time:.2f}s")
                     record_request_performance(f"search_mirror:{mirror}", mirror_time)
                 else:
-                    logger.info(f"No results from {mirror}")
+                    logger.info(f"❌ No results from {mirror}")
                     
             except Exception as e:
-                logger.warning(f"Failed to search {mirror}: {str(e)}")
+                logger.warning(f"Failed to process results from {mirror}: {str(e)}")
                 continue
                 
         # Remove duplicates based on MD5 hash

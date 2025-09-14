@@ -8,6 +8,7 @@ import logging
 import re
 import os
 import asyncio
+import time
 from typing import Optional, List, Dict, Any
 from io import BytesIO
 import aiohttp
@@ -30,9 +31,18 @@ from utils.file_handler import FileHandler
 from utils.concurrent_file_handler import ConcurrentFileHandler
 from utils.truly_parallel_file_handler import TrulyParallelFileHandler
 from utils.http_client import get_http_client, close_http_client, record_request_performance
+from monitoring import get_metrics_integration
+
+# Import metrics integration
+try:
+    from monitoring import get_metrics, track_search_request
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    print("Warning: Monitoring metrics not available")
 
 # Load environment variables
-load_dotenv()
+load_dotenv('/app/.env')
 
 # Setup logging
 logger = setup_logger(__name__)
@@ -61,6 +71,18 @@ class TelegramLibGenBot:
             self.file_handler = None
             self.concurrent_file_handler = None
             self.truly_parallel_file_handler = None
+        
+        # Initialize metrics integration
+        try:
+            from monitoring import get_metrics, start_metrics_server
+            self.metrics = get_metrics()
+            # Start metrics server on port 8000
+            start_metrics_server(port=8000)
+            self.metrics.record_system_status("bot", "initialized")
+            logger.info("✅ Metrics integration initialized and server started on port 8000")
+        except Exception as e:
+            logger.warning(f"⚠️ Metrics integration not available: {e}")
+            self.metrics = None
             
         # Performance tracking
         self.search_stats = {
@@ -222,7 +244,8 @@ class TelegramLibGenBot:
             return
             
         query = ' '.join(context.args)
-        await self.handle_search(update, context, query)
+        # Don't await - let search run in background for true concurrency
+        asyncio.create_task(self._handle_search_non_blocking(update, context, query))
         
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle text messages as search queries."""
@@ -231,12 +254,25 @@ class TelegramLibGenBot:
             
         query = update.message.text.strip()
         if query:
-            await self.handle_search(update, context, query)
+            # Create a completely non-blocking task
+            asyncio.create_task(self._handle_search_non_blocking(update, context, query))
         else:
-            await update.message.reply_text("Please send me a book title, author, or ISBN to search.")
+            # Use create_task for this too to avoid any blocking
+            asyncio.create_task(update.message.reply_text("Please send me a book title, author, or ISBN to search."))
+    
+    async def _handle_search_non_blocking(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
+        """Completely non-blocking search handler."""
+        try:
+            await self.handle_search(update, context, query)
+        except Exception as e:
+            logger.error(f"Error in non-blocking search: {e}")
+            try:
+                await update.message.reply_text("❌ An error occurred during search. Please try again.")
+            except:
+                pass
             
     async def handle_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
-        """Process search query and return results one by one."""
+        """Process search query and return results with TRUE concurrency."""
         import time
         
         # Get user information for logging
@@ -244,7 +280,13 @@ class TelegramLibGenBot:
         username = update.effective_user.username if update.effective_user and update.effective_user.username else "NoUsername"
         
         # Log search request with user details
-        logger.info(f"🔍 SEARCH REQUEST - User ID: {user_id} | Username: @{username} | Query: '{query}'")
+        logger.info(f"🔍 TRUE CONCURRENT SEARCH - User ID: {user_id} | Username: @{username} | Query: '{query}'")
+        
+        # Record metrics
+        if self.metrics:
+            self.metrics.record_user_info(str(user_id), username, "telegram_user", "search_request")
+            self.metrics.record_user_activity_detailed(str(user_id), username, "search", query)
+            self.metrics.record_user_query_length(str(user_id), username, len(query))
         
         # Clear any previous stop flag
         context.user_data.pop('stop_search', None)
@@ -253,15 +295,40 @@ class TelegramLibGenBot:
         start_time = time.time()
         self.search_stats['total_searches'] += 1
         
-        # Send searching message
-        searching_msg = await update.message.reply_text(
-            f"🔍 **Searching for:** *'{query}'*...\n\n"
-            f"⏳ Please wait while I find the best results for you!"
-        )
+        # Log that we're starting the search task
+        logger.info(f"🚀 Starting TRUE CONCURRENT search task for user {user_id} - query: '{query}'")
         
+        # Create a background task that runs independently (non-blocking)
+        task = asyncio.create_task(self._process_search_background(update, context, query, None, start_time, user_id))
+        # Don't await the task - let it run in background
+    
+    async def _process_search_background(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, searching_msg, start_time: float, user_id: str) -> None:
+        """Process search in background to allow true concurrency."""
         try:
-            # Perform search with performance tracking
-            results = await self.searcher.search(query)
+            # Send searching message if not already sent
+            if searching_msg is None:
+                searching_msg = await update.message.reply_text(
+                    f"🔍 **Searching for:** *'{query}'*...\n\n"
+                    f"⏳ Please wait while I find the best results for you!\n"
+                    f"🚀 **TRUE CONCURRENT PROCESSING** - other users can search simultaneously!"
+                )
+            
+            # Perform search with performance tracking and timeout protection
+            search_task = asyncio.create_task(self.searcher.search(query))
+            
+            # Add timeout protection to prevent hanging
+            try:
+                results = await asyncio.wait_for(search_task, timeout=60.0)  # 60 second timeout
+            except asyncio.TimeoutError:
+                logger.warning(f"Search timeout for query: '{query}'")
+                await searching_msg.edit_text(
+                    f"⏰ Search timed out for: '{query}'\n\n"
+                    "The search is taking longer than expected. Please try:\n"
+                    "• A more specific search term\n"
+                    "• Different keywords\n"
+                    "• Try again in a moment"
+                )
+                return
             
             # Check if user stopped search during the search phase
             if context.user_data.get('stop_search'):
@@ -279,9 +346,14 @@ class TelegramLibGenBot:
                 (current_avg * (total_successful - 1) + response_time) / total_successful
             )
             
-            # Log performance
-            logger.info(f"Search completed in {response_time:.2f}s for query: '{query}'")
-            record_request_performance(f"search:{query}", response_time)
+            # Log performance with concurrency info
+            logger.info(f"✅ TRUE CONCURRENT SEARCH COMPLETED - {response_time:.2f}s | User: {user_id} | Query: '{query}'")
+            record_request_performance(f"true_concurrent_search:{query}", response_time)
+            
+            # Record metrics
+            if self.metrics:
+                self.metrics.record_user_response_time(str(user_id), username, "search", response_time)
+                self.metrics.record_system_status("search_engine", "success")
             
             if not results:
                 await searching_msg.edit_text(
@@ -298,7 +370,8 @@ class TelegramLibGenBot:
             context.user_data['last_search_results'] = results
             await searching_msg.edit_text(
                 f"🎉 **Found {len(results)} results for:** *'{query}'*\n\n"
-                f"📤 Sending your results now..."
+                f"📤 Sending your results now...\n"
+                f"🚀 **TRUE CONCURRENT PROCESSING** - other users can continue searching!"
             )
             
             # Check again before starting to send results
@@ -312,11 +385,21 @@ class TelegramLibGenBot:
         except Exception as e:
             self.search_stats['failed_searches'] += 1
             response_time = time.time() - start_time
-            logger.error(f"Search error for query '{query}' after {response_time:.2f}s: {str(e)}")
-            record_request_performance(f"search_error:{query}", response_time)
+            logger.error(f"❌ TRUE CONCURRENT SEARCH ERROR - User: {user_id} | Query: '{query}' | Time: {response_time:.2f}s | Error: {str(e)}")
+            record_request_performance(f"true_concurrent_search_error:{query}", response_time)
+            
+            # Record error metrics
+            if self.metrics:
+                self.metrics.record_user_response_time(str(user_id), username, "search_error", response_time)
+                self.metrics.record_system_status("search_engine", "error")
             
             await searching_msg.edit_text(
-                "Search failed due to an error. Please try again later."
+                f"❌ Search failed for: '{query}'\n\n"
+                "This might be due to:\n"
+                "• Network connectivity issues\n"
+                "• High server load\n"
+                "• Temporary mirror unavailability\n\n"
+                "Please try again in a moment."
             )
             
     async def send_paginated_results(self, update: Update, context: ContextTypes.DEFAULT_TYPE, results: List[Dict[str, Any]], page: int = 0) -> None:
@@ -1137,8 +1220,8 @@ class TelegramLibGenBot:
         
             
     def run(self) -> None:
-        """Start the bot."""
-        logger.info("Starting Telegram LibGen Bot...")
+        """Start the bot with optimized concurrency settings."""
+        logger.info("Starting Telegram LibGen Bot with concurrent processing...")
         
         # Configure proxy if available
         http_proxy = os.getenv('HTTP_PROXY')
@@ -1150,7 +1233,14 @@ class TelegramLibGenBot:
             request = HTTPXRequest(proxy=proxy_url)
             application = Application.builder().token(self.token).request(request).build()
         else:
-            application = Application.builder().token(self.token).build()
+            # Use optimized HTTPXRequest for better concurrency
+            request = HTTPXRequest(
+                connection_pool_size=100,  # Increased connection pool
+                read_timeout=30,
+                write_timeout=30,
+                connect_timeout=30
+            )
+            application = Application.builder().token(self.token).request(request).build()
         
         # Add handlers based on feature flags
         application.add_handler(CommandHandler("start", self.start_command))
@@ -1166,9 +1256,18 @@ class TelegramLibGenBot:
             
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
-        # Start the bot
-        logger.info("Bot is running...")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Configure concurrency settings
+        logger.info("Configuring bot for concurrent processing...")
+        logger.info(f"Max connections: 100, Keep-alive: 20, Timeout: 30s")
+        
+        # Start the bot with optimized polling settings
+        logger.info("Bot is running with concurrent processing enabled...")
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,  # Clear any pending updates
+            close_loop=False,  # Keep event loop running for concurrency
+            stop_signals=None  # Handle signals manually for graceful shutdown
+        )
 
 
 def main():

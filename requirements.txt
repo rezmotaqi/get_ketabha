@@ -33,3 +33,4 @@ python-magic==0.4.27
 
 # Performance monitoring
 psutil==5.9.6
+prometheus-client==0.16.0

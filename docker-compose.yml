@@ -2,7 +2,6 @@
 # Telegram LibGen Bot - Docker Compose Configuration
 # =============================================================================
 
-version: '3.8'
 
 services:
   # Main Telegram Bot Service

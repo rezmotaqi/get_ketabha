@@ -6,6 +6,10 @@ Run this script to start the bot.
 
 import sys
 import os
+from dotenv import load_dotenv
+
+# Load environment variables first
+load_dotenv('/app/.env')
 
 # Add src directory to path to enable imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
