@@ -44,10 +44,9 @@ class LibGenSearcher:
         resolve_env = os.getenv('LIBGEN_RESOLVE_FINAL_URLS', 'true').strip().lower()
         self.resolve_final_urls = resolve_env in ['1', 'true', 'yes', 'on']
         
-        logger.info(f"Initialized with {len(self.libgen_mirrors)} search mirrors (Comprehensive Sep 2025): {', '.join(self.libgen_mirrors)}")
-        logger.info(f"Initialized with {len(self.download_mirrors)} download mirrors (Comprehensive Sep 2025): {', '.join(self.download_mirrors)}")
-        logger.info(f"Resolve final download URLs: {self.resolve_final_urls}")
-        logger.info("Includes: Active mirrors, Russian LibGen mirrors, Anna's Archive, Z-Library, CyberLeninka")
+        logger.debug(f"Initialized with {len(self.libgen_mirrors)} search mirrors")
+        logger.debug(f"Initialized with {len(self.download_mirrors)} download mirrors")
+        logger.debug(f"Resolve final download URLs: {self.resolve_final_urls}")
         
     async def search(self, query: str, max_results: int = None) -> List[Dict[str, Any]]:
         """
@@ -64,30 +63,30 @@ class LibGenSearcher:
         if max_results is None:
             max_results = int(os.getenv('LIBGEN_MAX_RESULTS', '200'))
             
-        logger.info(f"Searching for: {query}")
+        logger.debug(f"Searching for: {query}")
         
         results = []
         
         # Try each mirror once until we get results
         for mirror in self.libgen_mirrors:
             try:
-                logger.info(f"Attempting search on mirror: {mirror}")
+                logger.debug(f"Attempting search on mirror: {mirror}")
                 mirror_results = await self._search_mirror(mirror, query, max_results)
                 if mirror_results:
                     results.extend(mirror_results)
-                    logger.info(f"Found {len(mirror_results)} results from {mirror}")
+                    logger.debug(f"Found {len(mirror_results)} results from {mirror}")
                     break
                 else:
-                    logger.info(f"No results from {mirror}, trying next mirror")
+                    logger.debug(f"No results from {mirror}, trying next mirror")
                     
             except Exception as e:
-                logger.warning(f"Failed to search {mirror}: {str(e)}")
+                logger.debug(f"Failed to search {mirror}: {str(e)}")
                 continue
                 
         # Remove duplicates based on MD5 hash
         unique_results = self._remove_duplicates(results)
         
-        logger.info(f"Total unique results: {len(unique_results)}")
+        logger.debug(f"Total unique results: {len(unique_results)}")
         return unique_results[:max_results]
         
     async def _search_mirror(self, mirror: str, query: str, max_results: int) -> List[Dict[str, Any]]:
@@ -121,12 +120,12 @@ class LibGenSearcher:
                             html = await response.text()
                             return self._parse_search_results(html, mirror)
                         else:
-                            logger.warning(f"HTTP {response.status} from {mirror}")
+                            logger.debug(f"HTTP {response.status} from {mirror}")
                             
                 except asyncio.TimeoutError:
-                    logger.warning(f"Timeout on attempt {attempt + 1} for {mirror}")
+                    logger.debug(f"Timeout on attempt {attempt + 1} for {mirror}")
                 except Exception as e:
-                    logger.warning(f"Request error on attempt {attempt + 1} for {mirror}: {str(e)}")
+                    logger.debug(f"Request error on attempt {attempt + 1} for {mirror}: {str(e)}")
                     
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(1)  # Brief delay before retry
@@ -250,7 +249,7 @@ class LibGenSearcher:
                         results.append(book_info)
                         
                 except Exception as e:
-                    logger.warning(f"Error parsing result row: {str(e)}")
+                    logger.debug(f"Error parsing result row: {str(e)}")
                     continue
                     
         except Exception as e:
@@ -313,7 +312,7 @@ class LibGenSearcher:
                 download_links.extend(fallback_links)
                 
             except Exception as e:
-                logger.warning(f"Failed to get download links from {mirror}: {str(e)}")
+                logger.debug(f"Failed to get download links from {mirror}: {str(e)}")
                 continue
         
         # Add additional direct sources
@@ -584,7 +583,7 @@ class LibGenSearcher:
                             download_links.append(alt_dict)
                             
         except Exception as e:
-            logger.warning(f"Error getting final download links from {mirror}: {str(e)}")
+            logger.debug(f"Error getting final download links from {mirror}: {str(e)}")
             
         return download_links
         
@@ -609,7 +608,7 @@ class LibGenSearcher:
                                 download_urls.extend(links)
                                 break
                 except Exception as e:
-                    logger.warning(f"Error fetching {url}: {str(e)}")
+                    logger.debug(f"Error fetching {url}: {str(e)}")
                     continue
                     
         return download_urls

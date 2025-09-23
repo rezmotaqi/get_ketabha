@@ -23,10 +23,10 @@ from telegram.ext import (
 from dotenv import load_dotenv
 from telegram.request import HTTPXRequest
 
-from libgen_search import LibGenSearcher
-from utils.book_formatter import BookFormatter
-from utils.logger import setup_logger
-from utils.file_handler import FileHandler
+from .libgen_search import LibGenSearcher
+from .utils.book_formatter import BookFormatter
+from .utils.logger import setup_logger
+from .utils.file_handler import FileHandler
 
 # Load environment variables
 load_dotenv()
@@ -188,8 +188,7 @@ class TelegramLibGenBot:
         
         # Send searching message
         searching_msg = await update.message.reply_text(
-            f"🔍 **Searching for:** *'{query}'*...\n\n"
-            f"⏳ Please wait while I find the best results for you!"
+            f"🔍 **Searching for:** *'{query}'*..."
         )
         
         try:
@@ -203,8 +202,8 @@ class TelegramLibGenBot:
             
             if not results:
                 await searching_msg.edit_text(
-                    f"No results found for: '{query}'\n\n"
-                    "Try:\n"
+                    f"❌ **No results found for:** *'{query}'*\n\n"
+                    "💡 **Try:**\n"
                     "• Different keywords\n"
                     "• Author name\n"
                     "• Exact book title\n"
@@ -230,7 +229,8 @@ class TelegramLibGenBot:
         except Exception as e:
             logger.error(f"Search error for query '{query}': {str(e)}")
             await searching_msg.edit_text(
-                "Search failed due to an error. Please try again later."
+                "❌ **Search failed due to an error.**\n\n"
+                "Please try again later or contact support if the issue persists."
             )
             
     async def send_paginated_results(self, update: Update, context: ContextTypes.DEFAULT_TYPE, results: List[Dict[str, Any]], page: int = 0) -> None:
@@ -263,8 +263,10 @@ class TelegramLibGenBot:
                 message_parts.append(book_info)
                 
             except Exception as e:
-                logger.error(f"Error processing book {i}: {str(e)}")
-                simple_info = f"{i}. {book.get('title', 'Unknown')}\nError loading book details\n\n"
+                logger.debug(f"Error processing book {i}: {str(e)}")
+                simple_info = f"📚 <b>{i}. {book.get('title', 'Unknown')}</b>\n\n"
+                simple_info += f"⚠️ <i>Error loading book details</i>\n\n"
+                simple_info += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 message_parts.append(simple_info)
         
         # Create message
@@ -362,30 +364,29 @@ class TelegramLibGenBot:
                                 await update.message.reply_text("🛑 Search stopped by user request.")
                                 return
                             
-                            logger.info(f"Found {len(download_links)} download links for {title}")
                             if download_links:
-                                book_info += "<b>Download Links:</b>\n"
+                                book_info += "🔗 **Download Links:**\n"
                                 for link in download_links[:8]:  # Show up to 8 links per book
                                     url = link.get('url', '')
                                     if url:
                                         book_info += f"• {url}\n"
                             else:
-                                book_info += "<b>No download links available</b>\n"
+                                book_info += "❌ **No download links available**\n"
                         except asyncio.TimeoutError:
-                            logger.warning(f"Timeout fetching links for {title}")
-                            book_info += "<b>Timeout fetching links - try manual search</b>\n"
+                            logger.debug(f"Timeout fetching links for {title}")
+                            book_info += "⏰ **Timeout fetching links - try manual search**\n"
                         except Exception as e:
-                            logger.warning(f"Failed to get links for {title}: {str(e)}")
-                            book_info += "<b>Could not fetch download links</b>\n"
+                            logger.debug(f"Failed to get links for {title}: {str(e)}")
+                            book_info += "❌ **Could not fetch download links**\n"
                     else:
                         # Try alternative search methods for books without MD5
                         alternative_links = await self.get_alternative_search_links(title, author, format_ext)
                         if alternative_links:
-                            book_info += "<b>Alternative Search Links:</b>\n"
+                            book_info += "🔍 **Alternative Search Links:**\n"
                             for link in alternative_links[:3]:  # Limit alternative links
                                 book_info += f"• {link}\n"
                         else:
-                            book_info += "<b>No MD5 hash available - try manual search</b>\n"
+                            book_info += "❌ **No MD5 hash available - try manual search**\n"
                     
                     book_info += "\n"
                     message_parts.append(book_info)
@@ -394,8 +395,10 @@ class TelegramLibGenBot:
                     await asyncio.sleep(self.book_processing_delay)
                     
                 except Exception as e:
-                    logger.error(f"Error processing book {i}: {str(e)}")
-                    simple_info = f"{i}. {book.get('title', 'Unknown')}\nError loading book details\n\n"
+                    logger.debug(f"Error processing book {i}: {str(e)}")
+                    simple_info = f"📚 <b>{i}. {book.get('title', 'Unknown')}</b>\n\n"
+                    simple_info += f"⚠️ <i>Error loading book details</i>\n\n"
+                    simple_info += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                     message_parts.append(simple_info)
             
             # Send the batch message
@@ -414,9 +417,12 @@ class TelegramLibGenBot:
                         return
                         
                 except Exception as e:
-                    logger.error(f"Error sending batch message: {str(e)}")
+                    logger.debug(f"Error sending batch message: {str(e)}")
                     # Fallback to plain text
-                    await update.message.reply_text(f"Books {batch_start + 1}-{batch_end} (error in formatting)")
+                    await update.message.reply_text(
+                        f"📚 **Books {batch_start + 1}-{batch_end}**\n\n"
+                        f"⚠️ Error in formatting - please try again"
+                    )
 
     async def get_alternative_search_links(self, title: str, author: str, format_ext: str) -> List[str]:
         """Generate alternative search links for books without MD5 hashes."""
@@ -499,8 +505,8 @@ class TelegramLibGenBot:
                 await self.show_download_links(query, context, book, book_idx)
                 
         except Exception as e:
-            logger.error(f"Callback query error: {str(e)}")
-            await query.edit_message_text("❌ Error processing request. Please try again.")
+            logger.debug(f"Callback query error: {str(e)}")
+            await query.edit_message_text("❌ **Error processing request.**\n\nPlease try again.")
 
     async def send_paginated_results_edit(self, query, context: ContextTypes.DEFAULT_TYPE, results: List[Dict[str, Any]], page: int) -> None:
         """Edit message with new page of results."""
@@ -532,8 +538,10 @@ class TelegramLibGenBot:
                 message_parts.append(book_info)
                 
             except Exception as e:
-                logger.error(f"Error processing book {i}: {str(e)}")
-                simple_info = f"{i}. {book.get('title', 'Unknown')}\nError loading book details\n\n"
+                logger.debug(f"Error processing book {i}: {str(e)}")
+                simple_info = f"📚 <b>{i}. {book.get('title', 'Unknown')}</b>\n\n"
+                simple_info += f"⚠️ <i>Error loading book details</i>\n\n"
+                simple_info += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 message_parts.append(simple_info)
         
         # Create message
@@ -627,8 +635,8 @@ class TelegramLibGenBot:
             
             if not download_links:
                 await query.edit_message_text(
-                    f"❌ No download links found for: {title}\n\n"
-                    f"You can try searching manually with MD5: `{md5_hash}`",
+                    f"❌ **No download links found for:** *{title}*\n\n"
+                    f"🔍 You can try searching manually with MD5: `{md5_hash}`",
                     parse_mode='Markdown'
                 )
                 return
@@ -661,16 +669,16 @@ class TelegramLibGenBot:
                 
         except asyncio.TimeoutError:
             await query.edit_message_text(
-                f"⏰ Timeout downloading file for: {title}\n\n"
-                f"Falling back to download links..."
+                f"⏰ **Timeout downloading file for:** *{title}*\n\n"
+                f"🔄 Falling back to download links..."
             )
             # Fallback to showing links
             await self._show_download_links_only(query, context, book, title, md5_hash)
         except Exception as e:
-            logger.error(f"Error sending file for {title}: {str(e)}")
+            logger.debug(f"Error sending file for {title}: {str(e)}")
             await query.edit_message_text(
-                f"❌ Error downloading file for: {title}\n\n"
-                f"Falling back to download links..."
+                f"❌ **Error downloading file for:** *{title}*\n\n"
+                f"🔄 Falling back to download links..."
             )
             # Fallback to showing links
             await self._show_download_links_only(query, context, book, title, md5_hash)
@@ -678,7 +686,7 @@ class TelegramLibGenBot:
     async def _show_download_links_only(self, query, context: ContextTypes.DEFAULT_TYPE, book: Dict[str, Any], title: str, md5_hash: str) -> None:
         """Show download links only (fallback method)."""
         # Show getting links message
-        await query.edit_message_text(f"🔗 Getting download links for: {title}...")
+        await query.edit_message_text(f"🔗 **Getting download links for:** *{title}*...")
         
         try:
             # Get download links with configurable timeout
@@ -689,8 +697,8 @@ class TelegramLibGenBot:
             
             if not download_links:
                 await query.edit_message_text(
-                    f"❌ No download links found for: {title}\n\n"
-                    f"You can try searching manually with MD5: `{md5_hash}`",
+                    f"❌ **No download links found for:** *{title}*\n\n"
+                    f"🔍 You can try searching manually with MD5: `{md5_hash}`",
                     parse_mode='Markdown'
                 )
                 return
@@ -718,14 +726,14 @@ class TelegramLibGenBot:
             
         except asyncio.TimeoutError:
             await query.edit_message_text(
-                f"⏰ Timeout getting links for: {title}\n\n"
-                f"You can try searching manually with MD5: `{md5_hash}`",
+                f"⏰ **Timeout getting links for:** *{title}*\n\n"
+                f"🔍 You can try searching manually with MD5: `{md5_hash}`",
                 parse_mode='Markdown'
             )
         except Exception as e:
-            logger.error(f"Error getting download links: {str(e)}")
+            logger.debug(f"Error getting download links: {str(e)}")
             await query.edit_message_text(
-                f"❌ Error getting links for: {title}\n\n"
+                f"❌ **Error getting links for:** *{title}*\n\n"
                 "Please try again later."
             )
 
@@ -780,10 +788,10 @@ class TelegramLibGenBot:
             return []
             
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout fetching links for MD5: {md5_hash}")
+            logger.debug(f"Timeout fetching links for MD5: {md5_hash}")
             return []
         except Exception as e:
-            logger.warning(f"Error in cancellation-aware link fetching: {str(e)}")
+            logger.debug(f"Error in cancellation-aware link fetching: {str(e)}")
             return []
 
     def _select_best_link(self, links: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -865,7 +873,7 @@ class TelegramLibGenBot:
                         caption=f"📄 {filename}"
                     )
         except Exception as e:
-            logger.warning(f"Failed to send document from URL {url}: {e}")
+            logger.debug(f"Failed to send document from URL {url}: {e}")
             # Silent failure; links are still provided
 
     def _extract_filename_from_disposition(self, content_disposition: str) -> Optional[str]:
@@ -907,11 +915,13 @@ class TelegramLibGenBot:
         https_proxy = os.getenv('HTTPS_PROXY')
         
         if http_proxy or https_proxy:
-            logger.info(f"Using proxy: HTTP={http_proxy}, HTTPS={https_proxy}")
+            logger.info(f"🔧 Using HTTP proxy: {https_proxy or http_proxy}")
             proxy_url = https_proxy or http_proxy
-            request = HTTPXRequest(proxy=proxy_url)
+            # Create HTTPXRequest with proper proxy configuration
+            request = HTTPXRequest(proxy_url=proxy_url)
             application = Application.builder().token(self.token).request(request).build()
         else:
+            logger.info("🌐 No proxy configured, using direct connection")
             application = Application.builder().token(self.token).build()
         
         # Add handlers based on feature flags
@@ -928,7 +938,7 @@ class TelegramLibGenBot:
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
         # Start the bot
-        logger.info("Bot is running...")
+        logger.info("🤖 Bot is running...")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
@@ -938,8 +948,8 @@ def main():
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
     
     if not bot_token:
-        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables!")
-        print("Error: Please set TELEGRAM_BOT_TOKEN in your .env file")
+        logger.error("❌ TELEGRAM_BOT_TOKEN not found in environment variables!")
+        print("❌ Error: Please set TELEGRAM_BOT_TOKEN in your .env file")
         return
         
     # Create and run bot
@@ -948,9 +958,9 @@ def main():
     try:
         bot.run()
     except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+        logger.info("🛑 Bot stopped by user")
     except Exception as e:
-        logger.error(f"Bot error: {str(e)}")
+        logger.error(f"❌ Bot error: {str(e)}")
         
 
 if __name__ == '__main__':

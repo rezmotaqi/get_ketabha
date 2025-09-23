@@ -57,7 +57,7 @@ class FileHandler:
         self.min_size_bytes = int(self.min_size_mb * 1024 * 1024)
         self.max_size_bytes = int(self.max_size_mb * 1024 * 1024)
         
-        logger.info(f"FileHandler initialized: min_size={self.min_size_mb}MB, max_size={self.max_size_mb}MB")
+        logger.debug(f"FileHandler initialized: min_size={self.min_size_mb}MB, max_size={self.max_size_mb}MB")
     
     async def download_and_validate_file(self, url: str, expected_filename: str = None) -> Optional[Dict[str, Any]]:
         """
@@ -71,7 +71,7 @@ class FileHandler:
             Dictionary with file data and metadata, or None if validation fails
         """
         try:
-            logger.info(f"Downloading file from: {url}")
+            logger.debug(f"Downloading file from: {url}")
             
             # Download file with validation
             file_data = await self._download_file(url)
@@ -81,7 +81,7 @@ class FileHandler:
             # Validate file
             validation_result = await self._validate_file(file_data, expected_filename)
             if not validation_result['valid']:
-                logger.warning(f"File validation failed: {validation_result['reason']}")
+                logger.debug(f"File validation failed: {validation_result['reason']}")
                 return None
             
             # Prepare file for Telegram
@@ -114,7 +114,7 @@ class FileHandler:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(url, headers=headers, allow_redirects=True) as response:
                         if response.status != 200:
-                            logger.warning(f"HTTP {response.status} for {url} (attempt {attempt + 1})")
+                            logger.debug(f"HTTP {response.status} for {url} (attempt {attempt + 1})")
                             if attempt < self.retry_attempts - 1:
                                 await asyncio.sleep(2 ** attempt)  # Exponential backoff
                                 continue
@@ -125,10 +125,10 @@ class FileHandler:
                         if content_length:
                             size = int(content_length)
                             if size < self.min_size_bytes:
-                                logger.warning(f"File too small: {size} bytes < {self.min_size_bytes} bytes")
+                                logger.debug(f"File too small: {size} bytes < {self.min_size_bytes} bytes")
                                 return None
                             if size > self.max_size_bytes:
-                                logger.warning(f"File too large: {size} bytes > {self.max_size_bytes} bytes")
+                                logger.debug(f"File too large: {size} bytes > {self.max_size_bytes} bytes")
                                 return None
                         
                         # Download content
@@ -143,7 +143,7 @@ class FileHandler:
                             
                             # Check size during download
                             if downloaded > self.max_size_bytes:
-                                logger.warning(f"File exceeded size limit during download: {downloaded} bytes")
+                                logger.debug(f"File exceeded size limit during download: {downloaded} bytes")
                                 return None
                         
                         content.seek(0)
@@ -156,12 +156,12 @@ class FileHandler:
                         }
                         
             except asyncio.TimeoutError:
-                logger.warning(f"Timeout downloading {url} (attempt {attempt + 1})")
+                logger.debug(f"Timeout downloading {url} (attempt {attempt + 1})")
                 if attempt < self.retry_attempts - 1:
                     await asyncio.sleep(2 ** attempt)
                     continue
             except Exception as e:
-                logger.warning(f"Error downloading {url} (attempt {attempt + 1}): {str(e)}")
+                logger.debug(f"Error downloading {url} (attempt {attempt + 1}): {str(e)}")
                 if attempt < self.retry_attempts - 1:
                     await asyncio.sleep(2 ** attempt)
                     continue
@@ -329,7 +329,7 @@ class FileHandler:
         # Sort links by priority (direct downloads first)
         sorted_links = sorted(download_links, key=lambda x: self._get_link_priority(x))
         
-        logger.info(f"Trying to download file from {len(sorted_links)} links")
+        logger.debug(f"Trying to download file from {len(sorted_links)} links")
         
         for i, link in enumerate(sorted_links):
             try:
@@ -337,7 +337,7 @@ class FileHandler:
                 if not url:
                     continue
                 
-                logger.info(f"Attempting download {i+1}/{len(sorted_links)}: {url}")
+                logger.debug(f"Attempting download {i+1}/{len(sorted_links)}: {url}")
                 
                 # Generate expected filename
                 expected_filename = None
@@ -350,16 +350,16 @@ class FileHandler:
                 # Download and validate
                 file_data = await self.download_and_validate_file(url, expected_filename)
                 if file_data:
-                    logger.info(f"Successfully downloaded and validated file: {file_data['filename']}")
+                    logger.debug(f"Successfully downloaded and validated file: {file_data['filename']}")
                     return file_data
                 else:
-                    logger.warning(f"Failed to download/validate file from: {url}")
+                    logger.debug(f"Failed to download/validate file from: {url}")
                     
             except Exception as e:
-                logger.error(f"Error processing link {url}: {str(e)}")
+                logger.debug(f"Error processing link {url}: {str(e)}")
                 continue
         
-        logger.warning("No valid files found from any download links")
+        logger.debug("No valid files found from any download links")
         return None
     
     def _get_link_priority(self, link: Dict[str, str]) -> int:

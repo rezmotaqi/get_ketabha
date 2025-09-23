@@ -43,9 +43,9 @@ def setup_logger(name: str, level: str = None) -> logging.Logger:
         '%(asctime)s - %(levelname)s - %(message)s'
     )
     
-    # Console handler
+    # Console handler - only show WARNING and above by default
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(simple_formatter)
     logger.addHandler(console_handler)
     

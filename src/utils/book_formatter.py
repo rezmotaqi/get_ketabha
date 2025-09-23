@@ -84,23 +84,23 @@ class BookFormatter:
         # Format extension
         extension = ext.upper() if ext else 'Unknown'
         
-        # Create formatted string
+        # Create formatted string with better spacing
         result = (
-            f"{emoji} <b>{index}. {title}</b>\n"
-            f"👤 <i>{author}</i>{year_str}\n"
-            f"📋 {extension}{size_str}{pages_str}"
+            f"{emoji} <b>{index}. {title}</b>\n\n"
+            f"👤 <b>Author:</b> {author}{year_str}\n"
+            f"📄 <b>Format:</b> {extension}{size_str}{pages_str}"
         )
         
         # Add publisher if available
         publisher = book.get('publisher', '').strip()
         if publisher and publisher != 'Unknown':
             publisher = self._truncate_text(publisher, 30)
-            result += f"\n🏢 {publisher}"
+            result += f"\n🏢 <b>Publisher:</b> {publisher}"
             
         # Add language if available and not English
         language = book.get('language', '').strip().lower()
         if language and language not in ['english', 'en', '']:
-            result += f"\n🌐 {language.title()}"
+            result += f"\n🌐 <b>Language:</b> {language.title()}"
             
         return result
         
@@ -167,9 +167,9 @@ class BookFormatter:
             Formatted string with download links
         """
         if not links:
-            return "❌ No download links available."
+            return "❌ **No download links available.**"
             
-        formatted_links = ["🔗 <b>Download Links:</b>\n"]
+        formatted_links = ["🔗 **Download Links:**\n"]
         
         for i, link in enumerate(links, 1):
             url = link.get('url', '')
@@ -191,7 +191,7 @@ class BookFormatter:
             else:
                 display_text = clean_text
                 
-            formatted_links.append(f"🔸 <a href='{url}'>{display_text}</a>")
+            formatted_links.append(f"📥 **{i}.** <a href='{url}'>{display_text}</a>")
             
         return '\n'.join(formatted_links)
         
@@ -207,8 +207,8 @@ class BookFormatter:
         Returns:
             Formatted summary string
         """
-        summary = f"🔍 <b>Search:</b> {query}\n"
-        summary += f"📊 <b>Results:</b> {total_results} found"
+        summary = f"🔍 **Search:** *{query}*\n"
+        summary += f"📊 **Results:** {total_results} found"
         
         if displayed_results < total_results:
             summary += f" (showing top {displayed_results})"
