@@ -104,12 +104,9 @@ class TelegramLibGenBot:
             return
             
         welcome_message = (
-            f"🤖 **Welcome to {self.bot_name}!**\n\n"
-            f"📚 **{self.bot_description}**\n\n"
-            "• 📖 Book title\n"
-            "• ✍️ Author name  \n"
-            "• 🔢 ISBN number\n\n"
-            "✨ **Just type your search query to get started!**"
+            f"🤖 **{self.bot_name}**\n\n"
+            f"📚 {self.bot_description}\n\n"
+            "✨ **Type your search query to start!**"
         )
         await update.message.reply_text(welcome_message)
         
@@ -120,22 +117,13 @@ class TelegramLibGenBot:
             
         help_message = (
             f"📖 **{self.bot_name} Help**\n\n"
-            "🤖 **Commands:**\n"
-            "• 🏁 `/start` - Start the bot\n"
-            "• ❓ `/help` - Show this help\n"
-            "• 🔍 `/search <query>` - Search for books\n"
-            "• 🛑 `/stop` - Stop current search\n\n"
-            "📚 **How to search:**\n"
-            "• 📖 Book title: *'The Great Gatsby'*\n"
-            "• ✍️ Author name: *'F. Scott Fitzgerald'*\n"
-            "• 🔢 ISBN: *'978-0-7432-7356-5'*\n\n"
+            "🔍 **Search:** Type book title, author, or ISBN\n"
+            "🛑 **Stop:** `/stop` to cancel search\n\n"
             "✨ **Features:**\n"
-            "🌍 Multiple download sources\n"
-            "📥 Direct download links\n"
-            "📁 Send files directly (if enabled)\n"
-            "📋 Book details (author, year, size, format)\n"
-            "⚡ Fast paginated results\n\n"
-            "⚠️ **Note:** This bot is for educational purposes only."
+            "📥 Download links\n"
+            "📁 Direct file sending\n"
+            "📋 Book details\n\n"
+            "⚠️ Educational use only"
         )
         await update.message.reply_text(help_message)
         
@@ -153,9 +141,7 @@ class TelegramLibGenBot:
         
         await update.message.reply_text(
             "🛑 **Search stopped!**\n\n"
-            "✨ You can start a new search anytime by:\n"
-            "• 📖 Sending me a book title\n"
-            "• 🔍 Using `/search` command"
+            "✨ Type a new search query to continue"
         )
         
     async def search_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -164,7 +150,7 @@ class TelegramLibGenBot:
             return
             
         if not context.args:
-            await update.message.reply_text("Please provide a search query. Example: /search python programming")
+            await update.message.reply_text("❌ Please provide a search query")
             return
             
         query = ' '.join(context.args)
@@ -179,7 +165,7 @@ class TelegramLibGenBot:
         if query:
             await self.handle_search(update, context, query)
         else:
-            await update.message.reply_text("Please send me a book title, author, or ISBN to search.")
+            await update.message.reply_text("❌ Please send a search query")
             
     async def handle_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
         """Process search query and return results one by one."""
@@ -188,7 +174,7 @@ class TelegramLibGenBot:
         
         # Send searching message
         searching_msg = await update.message.reply_text(
-            f"🔍 **Searching for:** *'{query}'*..."
+            f"🔍 Searching for *'{query}'*..."
         )
         
         try:
@@ -197,30 +183,25 @@ class TelegramLibGenBot:
             
             # Check if user stopped search during the search phase
             if context.user_data.get('stop_search'):
-                await searching_msg.edit_text("🛑 Search stopped by user request.")
+                await searching_msg.edit_text("🛑 Search stopped")
                 return
             
             if not results:
                 await searching_msg.edit_text(
-                    f"❌ **No results found for:** *'{query}'*\n\n"
-                    "💡 **Try:**\n"
-                    "• Different keywords\n"
-                    "• Author name\n"
-                    "• Exact book title\n"
-                    "• ISBN number"
+                    f"❌ No results found for *'{query}'*\n\n"
+                    "💡 Try different keywords or author name"
                 )
                 return
                 
             # Store results for callbacks and update search status
             context.user_data['last_search_results'] = results
             await searching_msg.edit_text(
-                f"🎉 **Found {len(results)} results for:** *'{query}'*\n\n"
-                f"📤 Sending your results now..."
+                f"🎉 Found {len(results)} results for *'{query}'*"
             )
             
             # Check again before starting to send results
             if context.user_data.get('stop_search'):
-                await searching_msg.edit_text("🛑 Search stopped by user request.")
+                await searching_msg.edit_text("🛑 Search stopped")
                 return
             
             # Send first 5 books immediately without download links
@@ -229,8 +210,7 @@ class TelegramLibGenBot:
         except Exception as e:
             logger.error(f"Search error for query '{query}': {str(e)}")
             await searching_msg.edit_text(
-                "❌ **Search failed due to an error.**\n\n"
-                "Please try again later or contact support if the issue persists."
+                "❌ Search failed. Please try again later."
             )
             
     async def send_paginated_results(self, update: Update, context: ContextTypes.DEFAULT_TYPE, results: List[Dict[str, Any]], page: int = 0) -> None:
@@ -240,7 +220,7 @@ class TelegramLibGenBot:
         end_idx = min(start_idx + books_per_page, len(results))
         
         if start_idx >= len(results):
-            await update.message.reply_text("No more results available.")
+            await update.message.reply_text("❌ No more results")
             return
         
         page_results = results[start_idx:end_idx]
@@ -255,18 +235,15 @@ class TelegramLibGenBot:
                 format_ext = book.get('extension', 'Unknown').upper()
                 size = book.get('size', 'Unknown')
                 
-                book_info = f"📚 <b>{i}. {title}</b>\n\n"
-                book_info += f"👤 <b>Author:</b> {author}\n"
-                book_info += f"📄 <b>Format:</b> {format_ext}  |  📅 <b>Year:</b> {year}  |  💾 <b>Size:</b> {size}\n\n"
-                book_info += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                book_info = f"📚 <b>{i}. {title}</b>\n"
+                book_info += f"👤 {author}  •  📄 {format_ext}  •  📅 {year}  •  💾 {size}\n\n"
                 
                 message_parts.append(book_info)
                 
             except Exception as e:
                 logger.debug(f"Error processing book {i}: {str(e)}")
-                simple_info = f"📚 <b>{i}. {book.get('title', 'Unknown')}</b>\n\n"
-                simple_info += f"⚠️ <i>Error loading book details</i>\n\n"
-                simple_info += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                simple_info = f"📚 <b>{i}. {book.get('title', 'Unknown')}</b>\n"
+                simple_info += f"⚠️ Error loading details\n\n"
                 message_parts.append(simple_info)
         
         # Create message
@@ -274,7 +251,7 @@ class TelegramLibGenBot:
         
         # Add page info with emojis
         total_pages = (len(results) + books_per_page - 1) // books_per_page
-        message += f"📄 <b>Page {page + 1} of {total_pages}</b>  •  📊 <b>{len(results)} total results</b>"
+        message += f"📄 Page {page + 1}/{total_pages}  •  📊 {len(results)} results"
         
         # Create pagination buttons
         buttons = []
@@ -315,7 +292,7 @@ class TelegramLibGenBot:
         for batch_start in range(0, len(results), batch_size):
             # Check if user requested to stop
             if context.user_data.get('stop_search'):
-                await update.message.reply_text("🛑 Search stopped by user request.")
+                await update.message.reply_text("🛑 Search stopped")
                 return
             
             batch_end = min(batch_start + batch_size, len(results))
@@ -326,7 +303,7 @@ class TelegramLibGenBot:
             for i, book in enumerate(batch_results, batch_start + 1):
                 # Check for stop request during processing
                 if context.user_data.get('stop_search'):
-                    await update.message.reply_text("🛑 Search stopped by user request.")
+                    await update.message.reply_text("🛑 Search stopped")
                     return
                     
                 try:
@@ -344,7 +321,7 @@ class TelegramLibGenBot:
                     
                     # Check for stop request before fetching links
                     if context.user_data.get('stop_search'):
-                        await update.message.reply_text("🛑 Search stopped by user request.")
+                        await update.message.reply_text("🛑 Search stopped")
                         return
                     
                     # Get download links for this book
@@ -361,32 +338,32 @@ class TelegramLibGenBot:
                             
                             # Final check for stop request after fetching links
                             if context.user_data.get('stop_search'):
-                                await update.message.reply_text("🛑 Search stopped by user request.")
+                                await update.message.reply_text("🛑 Search stopped")
                                 return
                             
                             if download_links:
-                                book_info += "🔗 **Download Links:**\n"
+                                book_info += "🔗 **Links:**\n"
                                 for link in download_links[:8]:  # Show up to 8 links per book
                                     url = link.get('url', '')
                                     if url:
                                         book_info += f"• {url}\n"
                             else:
-                                book_info += "❌ **No download links available**\n"
+                                book_info += "❌ No links available\n"
                         except asyncio.TimeoutError:
                             logger.debug(f"Timeout fetching links for {title}")
-                            book_info += "⏰ **Timeout fetching links - try manual search**\n"
+                            book_info += "⏰ Timeout - try manual search\n"
                         except Exception as e:
                             logger.debug(f"Failed to get links for {title}: {str(e)}")
-                            book_info += "❌ **Could not fetch download links**\n"
+                            book_info += "❌ Could not fetch links\n"
                     else:
                         # Try alternative search methods for books without MD5
                         alternative_links = await self.get_alternative_search_links(title, author, format_ext)
                         if alternative_links:
-                            book_info += "🔍 **Alternative Search Links:**\n"
+                            book_info += "🔍 **Search Links:**\n"
                             for link in alternative_links[:3]:  # Limit alternative links
                                 book_info += f"• {link}\n"
                         else:
-                            book_info += "❌ **No MD5 hash available - try manual search**\n"
+                            book_info += "❌ No MD5 hash - try manual search\n"
                     
                     book_info += "\n"
                     message_parts.append(book_info)
@@ -413,7 +390,7 @@ class TelegramLibGenBot:
                     
                     # Check for stop request after sending each batch
                     if context.user_data.get('stop_search'):
-                        await update.message.reply_text("🛑 Search stopped by user request.")
+                        await update.message.reply_text("🛑 Search stopped")
                         return
                         
                 except Exception as e:
@@ -486,7 +463,7 @@ class TelegramLibGenBot:
                 results = context.user_data.get('last_search_results', [])
                 
                 if not results:
-                    await query.edit_message_text("❌ Search results expired. Please search again.")
+                    await query.edit_message_text("❌ Results expired. Search again.")
                     return
                 
                 # Update the message with new page
@@ -498,7 +475,7 @@ class TelegramLibGenBot:
                 results = context.user_data.get('last_search_results', [])
                 
                 if not results or book_idx >= len(results):
-                    await query.edit_message_text("❌ Book not found. Please search again.")
+                    await query.edit_message_text("❌ Book not found. Search again.")
                     return
                 
                 book = results[book_idx]
@@ -506,7 +483,7 @@ class TelegramLibGenBot:
                 
         except Exception as e:
             logger.debug(f"Callback query error: {str(e)}")
-            await query.edit_message_text("❌ **Error processing request.**\n\nPlease try again.")
+            await query.edit_message_text("❌ Error processing request. Try again.")
 
     async def send_paginated_results_edit(self, query, context: ContextTypes.DEFAULT_TYPE, results: List[Dict[str, Any]], page: int) -> None:
         """Edit message with new page of results."""
@@ -515,7 +492,7 @@ class TelegramLibGenBot:
         end_idx = min(start_idx + books_per_page, len(results))
         
         if start_idx >= len(results):
-            await query.edit_message_text("No more results available.")
+            await query.edit_message_text("❌ No more results")
             return
         
         page_results = results[start_idx:end_idx]
@@ -530,18 +507,15 @@ class TelegramLibGenBot:
                 format_ext = book.get('extension', 'Unknown').upper()
                 size = book.get('size', 'Unknown')
                 
-                book_info = f"📚 <b>{i}. {title}</b>\n\n"
-                book_info += f"👤 <b>Author:</b> {author}\n"
-                book_info += f"📄 <b>Format:</b> {format_ext}  |  📅 <b>Year:</b> {year}  |  💾 <b>Size:</b> {size}\n\n"
-                book_info += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                book_info = f"📚 <b>{i}. {title}</b>\n"
+                book_info += f"👤 {author}  •  📄 {format_ext}  •  📅 {year}  •  💾 {size}\n\n"
                 
                 message_parts.append(book_info)
                 
             except Exception as e:
                 logger.debug(f"Error processing book {i}: {str(e)}")
-                simple_info = f"📚 <b>{i}. {book.get('title', 'Unknown')}</b>\n\n"
-                simple_info += f"⚠️ <i>Error loading book details</i>\n\n"
-                simple_info += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                simple_info = f"📚 <b>{i}. {book.get('title', 'Unknown')}</b>\n"
+                simple_info += f"⚠️ Error loading details\n\n"
                 message_parts.append(simple_info)
         
         # Create message
@@ -549,7 +523,7 @@ class TelegramLibGenBot:
         
         # Add page info with emojis
         total_pages = (len(results) + books_per_page - 1) // books_per_page
-        message += f"📄 <b>Page {page + 1} of {total_pages}</b>  •  📊 <b>{len(results)} total results</b>"
+        message += f"📄 Page {page + 1}/{total_pages}  •  📊 {len(results)} results"
         
         # Create pagination buttons
         buttons = []
@@ -596,17 +570,15 @@ class TelegramLibGenBot:
                 book.get('extension', '')
             )
             
-            links_text = f"📚 **{title}**\n\n"
-            links_text += f"👤 **Author:** {book.get('author', 'Unknown')}\n"
-            links_text += f"📄 **Format:** {book.get('extension', 'Unknown')}  •  📅 **Year:** {book.get('year', 'Unknown')}  •  💾 **Size:** {book.get('size', 'Unknown')}\n\n"
-            links_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            links_text = f"📚 **{title}**\n"
+            links_text += f"👤 {book.get('author', 'Unknown')}  •  📄 {book.get('extension', 'Unknown')}  •  📅 {book.get('year', 'Unknown')}  •  💾 {book.get('size', 'Unknown')}\n\n"
             
             if alternative_links:
-                links_text += "🔍 **Alternative Search Links:**\n\n"
+                links_text += "🔍 **Search Links:**\n\n"
                 for i, link in enumerate(alternative_links[:self.max_alternative_links], 1):
                     links_text += f"🌐 **{i}.** {link}\n\n"
             else:
-                links_text += "❌ **No MD5 hash available for direct download links.**"
+                links_text += "❌ No MD5 hash available"
             
             await query.edit_message_text(
                 links_text,
@@ -624,7 +596,7 @@ class TelegramLibGenBot:
     async def _send_book_file(self, query, context: ContextTypes.DEFAULT_TYPE, book: Dict[str, Any], title: str, md5_hash: str) -> None:
         """Send book file directly through Telegram."""
         # Show downloading message
-        await query.edit_message_text(f"📁 Downloading file for: {title}...")
+        await query.edit_message_text(f"📁 Downloading {title}...")
         
         try:
             # Get download links
@@ -635,8 +607,8 @@ class TelegramLibGenBot:
             
             if not download_links:
                 await query.edit_message_text(
-                    f"❌ **No download links found for:** *{title}*\n\n"
-                    f"🔍 You can try searching manually with MD5: `{md5_hash}`",
+                    f"❌ No download links found for *{title}*\n\n"
+                    f"🔍 Try manual search with MD5: `{md5_hash}`",
                     parse_mode='Markdown'
                 )
                 return
@@ -649,19 +621,16 @@ class TelegramLibGenBot:
                 await query.message.reply_document(
                     document=file_data['data'],
                     filename=file_data['filename'],
-                    caption=f"📚 **{title}**\n\n"
-                           f"👤 **Author:** {book.get('author', 'Unknown')}\n"
-                           f"📄 **Format:** {file_data['extension'].upper()}\n"
-                           f"💾 **Size:** {file_data['size']:,} bytes\n\n"
-                           f"✅ **File sent successfully!**"
+                    caption=f"📚 **{title}**\n"
+                           f"👤 {book.get('author', 'Unknown')}  •  📄 {file_data['extension'].upper()}  •  💾 {file_data['size']:,} bytes\n\n"
+                           f"✅ File sent successfully!"
                 )
                 
                 # Update the original message
                 await query.edit_message_text(
-                    f"✅ **File sent successfully!**\n\n"
+                    f"✅ File sent successfully!\n\n"
                     f"📚 **{title}**\n"
-                    f"📄 **Format:** {file_data['extension'].upper()}\n"
-                    f"💾 **Size:** {file_data['size']:,} bytes"
+                    f"📄 {file_data['extension'].upper()}  •  💾 {file_data['size']:,} bytes"
                 )
             else:
                 # Fallback to showing links
@@ -669,16 +638,16 @@ class TelegramLibGenBot:
                 
         except asyncio.TimeoutError:
             await query.edit_message_text(
-                f"⏰ **Timeout downloading file for:** *{title}*\n\n"
-                f"🔄 Falling back to download links..."
+                f"⏰ Timeout downloading *{title}*\n\n"
+                f"🔄 Falling back to links..."
             )
             # Fallback to showing links
             await self._show_download_links_only(query, context, book, title, md5_hash)
         except Exception as e:
             logger.debug(f"Error sending file for {title}: {str(e)}")
             await query.edit_message_text(
-                f"❌ **Error downloading file for:** *{title}*\n\n"
-                f"🔄 Falling back to download links..."
+                f"❌ Error downloading *{title}*\n\n"
+                f"🔄 Falling back to links..."
             )
             # Fallback to showing links
             await self._show_download_links_only(query, context, book, title, md5_hash)
@@ -686,7 +655,7 @@ class TelegramLibGenBot:
     async def _show_download_links_only(self, query, context: ContextTypes.DEFAULT_TYPE, book: Dict[str, Any], title: str, md5_hash: str) -> None:
         """Show download links only (fallback method)."""
         # Show getting links message
-        await query.edit_message_text(f"🔗 **Getting download links for:** *{title}*...")
+        await query.edit_message_text(f"🔗 Getting links for *{title}*...")
         
         try:
             # Get download links with configurable timeout
@@ -697,17 +666,15 @@ class TelegramLibGenBot:
             
             if not download_links:
                 await query.edit_message_text(
-                    f"❌ **No download links found for:** *{title}*\n\n"
-                    f"🔍 You can try searching manually with MD5: `{md5_hash}`",
+                    f"❌ No download links found for *{title}*\n\n"
+                    f"🔍 Try manual search with MD5: `{md5_hash}`",
                     parse_mode='Markdown'
                 )
                 return
             
             # Format message with download links
-            links_text = f"📚 **{title}**\n\n"
-            links_text += f"👤 **Author:** {book.get('author', 'Unknown')}\n"
-            links_text += f"📄 **Format:** {book.get('extension', 'Unknown')}  •  📅 **Year:** {book.get('year', 'Unknown')}  •  💾 **Size:** {book.get('size', 'Unknown')}\n\n"
-            links_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            links_text = f"📚 **{title}**\n"
+            links_text += f"👤 {book.get('author', 'Unknown')}  •  📄 {book.get('extension', 'Unknown')}  •  📅 {book.get('year', 'Unknown')}  •  💾 {book.get('size', 'Unknown')}\n\n"
             links_text += "🔗 **Download Links:**\n\n"
             
             for i, link in enumerate(download_links[:self.max_links_per_book], 1):
@@ -716,7 +683,7 @@ class TelegramLibGenBot:
                     links_text += f"📥 **{i}.** {url}\n\n"
             
             links_text += f"🔍 **MD5:** `{md5_hash}`\n\n"
-            links_text += "📋 **Copy the links and paste into a browser**"
+            links_text += "📋 Copy links to browser"
             
             await query.edit_message_text(
                 links_text,
@@ -726,15 +693,15 @@ class TelegramLibGenBot:
             
         except asyncio.TimeoutError:
             await query.edit_message_text(
-                f"⏰ **Timeout getting links for:** *{title}*\n\n"
-                f"🔍 You can try searching manually with MD5: `{md5_hash}`",
+                f"⏰ Timeout getting links for *{title}*\n\n"
+                f"🔍 Try manual search with MD5: `{md5_hash}`",
                 parse_mode='Markdown'
             )
         except Exception as e:
             logger.debug(f"Error getting download links: {str(e)}")
             await query.edit_message_text(
-                f"❌ **Error getting links for:** *{title}*\n\n"
-                "Please try again later."
+                f"❌ Error getting links for *{title}*\n\n"
+                "Try again later."
             )
 
     async def _fetch_links_with_cancellation(self, md5_hash: str, context: ContextTypes.DEFAULT_TYPE, update: Update) -> Optional[List[Dict[str, Any]]]:
@@ -768,7 +735,7 @@ class TelegramLibGenBot:
             
             # Check if cancellation was requested
             if context.user_data.get('stop_search'):
-                await update.message.reply_text("🛑 Search stopped by user request.")
+                await update.message.reply_text("🛑 Search stopped")
                 return None
             
             # Get the result from the completed download task
@@ -779,7 +746,7 @@ class TelegramLibGenBot:
                         if isinstance(result, list):  # This is the download links result
                             return result
                         elif isinstance(result, bool) and result:  # This is cancellation signal
-                            await update.message.reply_text("🛑 Search stopped by user request.")
+                            await update.message.reply_text("🛑 Search stopped")
                             return None
                     except Exception:
                         pass
@@ -838,7 +805,7 @@ class TelegramLibGenBot:
                         size_mb = int(content_length) / (1024 * 1024)
                         if size_mb > self.max_download_mb:
                             await update.message.reply_text(
-                                f"File is too large to send as document (~{size_mb:.1f} MB). Download via link above."
+                                f"File too large (~{size_mb:.1f} MB). Use link above."
                             )
                             return
                 except Exception:
@@ -863,7 +830,7 @@ class TelegramLibGenBot:
                         downloaded += len(chunk)
                         if downloaded > max_bytes:
                             await update.message.reply_text(
-                                "Download exceeded size limit; please use the link above."
+                                "Download too large. Use link above."
                             )
                             return
                     buffer.seek(0)
