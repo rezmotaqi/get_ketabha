@@ -11,9 +11,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    # Network optimization
+    PYTHONIOENCODING=utf-8 \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    # HTTP optimization
+    HTTPX_TIMEOUT=30 \
+    AIOHTTP_TIMEOUT=30
 
-# Install system dependencies
+# Install system dependencies including network optimization tools
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -23,7 +29,21 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libmagic1 \
     libmagic-dev \
+    ca-certificates \
+    curl \
+    wget \
+    iputils-ping \
+    dnsutils \
+    procps \
     && rm -rf /var/lib/apt/lists/*
+
+# Configure network optimizations
+RUN echo 'net.core.rmem_max = 134217728' >> /etc/sysctl.conf && \
+    echo 'net.core.wmem_max = 134217728' >> /etc/sysctl.conf && \
+    echo 'net.ipv4.tcp_rmem = 4096 65536 134217728' >> /etc/sysctl.conf && \
+    echo 'net.ipv4.tcp_wmem = 4096 65536 134217728' >> /etc/sysctl.conf && \
+    echo 'net.core.netdev_max_backlog = 5000' >> /etc/sysctl.conf && \
+    echo 'net.ipv4.tcp_congestion_control = bbr' >> /etc/sysctl.conf
 
 # =============================================================================
 # Development stage
@@ -70,9 +90,10 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install only production dependencies
+# Install only production dependencies with optimizations
 RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir httpx[http2] aiofiles
 
 # Copy source code
 COPY . .
@@ -90,6 +111,51 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Default command
 CMD ["python", "main.py"]
+
+# =============================================================================
+# Performance-optimized stage
+# =============================================================================
+FROM base as performance
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install dependencies with performance optimizations
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir httpx[http2] aiofiles uvloop
+
+# Copy source code
+COPY . .
+
+# Create non-root user for security
+RUN groupadd -r botuser && useradd -r -g botuser botuser
+
+# Create logs directory and set proper permissions
+RUN mkdir -p logs && chown -R botuser:botuser /app
+
+# Apply network optimizations at runtime
+RUN echo '#!/bin/bash' > /app/optimize_network.sh && \
+    echo 'sysctl -w net.core.rmem_max=134217728' >> /app/optimize_network.sh && \
+    echo 'sysctl -w net.core.wmem_max=134217728' >> /app/optimize_network.sh && \
+    echo 'sysctl -w net.ipv4.tcp_rmem="4096 65536 134217728"' >> /app/optimize_network.sh && \
+    echo 'sysctl -w net.ipv4.tcp_wmem="4096 65536 134217728"' >> /app/optimize_network.sh && \
+    echo 'sysctl -w net.core.netdev_max_backlog=5000' >> /app/optimize_network.sh && \
+    echo 'sysctl -w net.ipv4.tcp_congestion_control=bbr' >> /app/optimize_network.sh && \
+    chmod +x /app/optimize_network.sh && \
+    chown botuser:botuser /app/optimize_network.sh
+
+USER botuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import requests; requests.get('https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe', timeout=5)" || exit 1
+
+# Default command with network optimization
+CMD ["/bin/bash", "-c", "/app/optimize_network.sh && python main.py"]
 
 # =============================================================================
 # Alpine variant for smaller image size

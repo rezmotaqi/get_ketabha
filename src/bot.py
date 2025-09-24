@@ -8,6 +8,7 @@ import logging
 import re
 import os
 import asyncio
+import time
 from typing import Optional, List, Dict, Any
 from io import BytesIO
 import aiohttp
@@ -27,9 +28,21 @@ from .libgen_search import LibGenSearcher
 from .utils.book_formatter import BookFormatter
 from .utils.logger import setup_logger
 from .utils.file_handler import FileHandler
+from .utils.concurrent_file_handler import ConcurrentFileHandler
+from .utils.truly_parallel_file_handler import TrulyParallelFileHandler
+from .utils.http_client import get_http_client, close_http_client, record_request_performance
+from monitoring import get_metrics_integration
+
+# Import metrics integration
+try:
+    from monitoring import get_metrics, track_search_request
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    print("Warning: Monitoring metrics not available")
 
 # Load environment variables
-load_dotenv()
+load_dotenv('/app/.env')
 
 # Setup logging
 logger = setup_logger(__name__)
@@ -46,11 +59,52 @@ class TelegramLibGenBot:
         # Load configuration from environment variables
         self._load_config()
         
-        # Initialize file handler if file sending is enabled
+        # Initialize optimized HTTP client
+        self.http_client = get_http_client()
+        
+        # Initialize file handlers if file sending is enabled
         if self.feature_send_files:
             self.file_handler = FileHandler(self._get_file_config())
+            self.concurrent_file_handler = ConcurrentFileHandler(self._get_file_config())
+            self.truly_parallel_file_handler = TrulyParallelFileHandler(self._get_file_config())
         else:
             self.file_handler = None
+            self.concurrent_file_handler = None
+            self.truly_parallel_file_handler = None
+        
+        # Initialize metrics integration
+        try:
+            from monitoring import initialize_metrics
+            # Initialize metrics and start server
+            if initialize_metrics(port=8000):
+                # Get the metrics integration instance
+                from monitoring import get_metrics_integration
+                self.metrics_integration = get_metrics_integration()
+                self.metrics = self.metrics_integration.metrics
+                self.metrics.record_system_status("bot", "initialized")
+                logger.info("✅ Metrics integration fully initialized and server started on port 8000")
+            else:
+                logger.error("❌ Failed to initialize metrics system")
+                self.metrics = None
+                self.metrics_integration = None
+        except Exception as e:
+            logger.warning(f"⚠️ Metrics integration not available: {e}")
+            self.metrics = None
+            self.metrics_integration = None
+            
+        # Performance tracking
+        self.search_stats = {
+            'total_searches': 0,
+            'successful_searches': 0,
+            'failed_searches': 0,
+            'average_response_time': 0.0,
+            'total_downloads': 0,
+            'total_uploads': 0,
+            'average_download_speed': 0.0,
+            'average_upload_speed': 0.0,
+            'total_download_size_mb': 0.0,
+            'total_upload_size_mb': 0.0
+        }
     
     def _load_config(self):
         """Load all configuration from environment variables."""
@@ -117,15 +171,54 @@ class TelegramLibGenBot:
             
         help_message = (
             f"📖 **{self.bot_name} Help**\n\n"
-            "🔍 **Search:** Type book title, author, or ISBN\n"
-            "🛑 **Stop:** `/stop` to cancel search\n\n"
+            "🤖 **Commands:**\n"
+            "• 🏁 `/start` - Start the bot\n"
+            "• ❓ `/help` - Show this help\n"
+            "• 🔍 `/search <query>` - Search for books\n"
+            "• 📊 `/stats` - Show bot performance stats\n"
+            "• 🛑 `/stop` - Stop current search\n\n"
+            "📚 **How to search:**\n"
+            "• 📖 Book title: *'The Great Gatsby'*\n"
+            "• ✍️ Author name: *'F. Scott Fitzgerald'*\n"
+            "• 🔢 ISBN: *'978-0-7432-7356-5'*\n\n"
             "✨ **Features:**\n"
-            "📥 Download links\n"
-            "📁 Direct file sending\n"
-            "📋 Book details\n\n"
-            "⚠️ Educational use only"
+            "🌍 Multiple download sources\n"
+            "📥 Direct download links\n"
+            "📁 Send files directly (if enabled)\n"
+            "📋 Book details (author, year, size, format)\n"
+            "⚡ Fast paginated results\n"
+            "🚀 Optimized performance\n\n"
+            "⚠️ **Note:** This bot is for educational purposes only."
         )
         await update.message.reply_text(help_message)
+        
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /stats command to show bot performance statistics."""
+        if not update.message:
+            return
+            
+        stats = self.search_stats
+        success_rate = (stats['successful_searches'] / stats['total_searches'] * 100) if stats['total_searches'] > 0 else 0
+        
+        stats_message = (
+            f"📊 **{self.bot_name} Performance Stats**\n\n"
+            f"🔍 **Search Statistics:**\n"
+            f"   • Total Searches: {stats['total_searches']}\n"
+            f"   • Successful: {stats['successful_searches']}\n"
+            f"   • Failed: {stats['failed_searches']}\n"
+            f"   • Success Rate: {success_rate:.1f}%\n"
+            f"   • Avg Response Time: {stats['average_response_time']:.2f}s\n\n"
+            f"📥 **Download Statistics:**\n"
+            f"   • Total Downloads: {stats['total_downloads']}\n"
+            f"   • Avg Download Speed: {stats['average_download_speed']:.2f} MB/s\n"
+            f"   • Total Downloaded: {stats['total_download_size_mb']:.1f} MB\n\n"
+            f"📤 **Upload Statistics:**\n"
+            f"   • Total Uploads: {stats['total_uploads']}\n"
+            f"   • Avg Upload Speed: {stats['average_upload_speed']:.2f} MB/s\n"
+            f"   • Total Uploaded: {stats['total_upload_size_mb']:.1f} MB\n\n"
+            f"🚀 **Performance:** Optimized with connection pooling and caching"
+        )
+        await update.message.reply_text(stats_message)
         
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /stop command to cancel current search."""
@@ -154,7 +247,8 @@ class TelegramLibGenBot:
             return
             
         query = ' '.join(context.args)
-        await self.handle_search(update, context, query)
+        # Don't await - let search run in background for true concurrency
+        asyncio.create_task(self._handle_search_non_blocking(update, context, query))
         
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle text messages as search queries."""
@@ -163,28 +257,113 @@ class TelegramLibGenBot:
             
         query = update.message.text.strip()
         if query:
-            await self.handle_search(update, context, query)
+            # Create a completely non-blocking task
+            asyncio.create_task(self._handle_search_non_blocking(update, context, query))
         else:
-            await update.message.reply_text("❌ Please send a search query")
+            # Use create_task for this too to avoid any blocking
+            asyncio.create_task(update.message.reply_text("Please send me a book title, author, or ISBN to search."))
+    
+    async def _handle_search_non_blocking(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
+        """Completely non-blocking search handler."""
+        try:
+            await self.handle_search(update, context, query)
+        except Exception as e:
+            logger.error(f"Error in non-blocking search: {e}")
+            try:
+                await update.message.reply_text("❌ An error occurred during search. Please try again.")
+            except:
+                pass
             
     async def handle_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
-        """Process search query and return results one by one."""
+        """Process search query and return results with TRUE concurrency."""
+        import time
+        
+        # Get user information for logging
+        user_id = update.effective_user.id if update.effective_user else "Unknown"
+        username = update.effective_user.username if update.effective_user and update.effective_user.username else "NoUsername"
+        
+        # Log search request with user details
+        logger.info(f"🔍 TRUE CONCURRENT SEARCH - User ID: {user_id} | Username: @{username} | Query: '{query}'")
+        
+        # Record metrics
+        if self.metrics:
+            self.metrics.record_user_info(str(user_id), username, "telegram_user", "search_request")
+            self.metrics.record_user_activity_detailed(str(user_id), username, "search", query)
+            self.metrics.record_user_query_length(str(user_id), username, len(query))
+            # Record search request start
+            self.metrics.record_search_request("book_search", "started", 0.0, 0)
+        
         # Clear any previous stop flag
         context.user_data.pop('stop_search', None)
         
-        # Send searching message
-        searching_msg = await update.message.reply_text(
-            f"🔍 Searching for *'{query}'*..."
-        )
+        # Track search performance
+        start_time = time.time()
+        self.search_stats['total_searches'] += 1
+        
+        # Log that we're starting the search task
+        logger.info(f"🚀 Starting TRUE CONCURRENT search task for user {user_id} - query: '{query}'")
+        
+        # Create a background task that runs independently (non-blocking)
+        task = asyncio.create_task(self._process_search_background(update, context, query, None, start_time, user_id))
+        # Don't await the task - let it run in background
+    
+    async def _process_search_background(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str, searching_msg, start_time: float, user_id: str) -> None:
+        """Process search in background to allow true concurrency."""
+        # Get username for metrics
+        username = update.effective_user.username if update.effective_user and update.effective_user.username else "NoUsername"
         
         try:
-            # Perform search
-            results = await self.searcher.search(query)
+            # Send searching message if not already sent
+            if searching_msg is None:
+                searching_msg = await update.message.reply_text(
+                    f"🔍 **Searching for:** *'{query}'*...\n\n"
+                    f"⏳ Please wait while I find the best results for you!\n"
+                    f"🚀 **TRUE CONCURRENT PROCESSING** - other users can search simultaneously!"
+                )
+            
+            # Perform search with performance tracking and timeout protection
+            search_task = asyncio.create_task(self.searcher.search(query))
+            
+            # Add timeout protection to prevent hanging
+            try:
+                results = await asyncio.wait_for(search_task, timeout=60.0)  # 60 second timeout
+            except asyncio.TimeoutError:
+                logger.warning(f"Search timeout for query: '{query}'")
+                await searching_msg.edit_text(
+                    f"⏰ Search timed out for: '{query}'\n\n"
+                    "The search is taking longer than expected. Please try:\n"
+                    "• A more specific search term\n"
+                    "• Different keywords\n"
+                    "• Try again in a moment"
+                )
+                return
             
             # Check if user stopped search during the search phase
             if context.user_data.get('stop_search'):
                 await searching_msg.edit_text("🛑 Search stopped")
                 return
+            
+            # Calculate response time
+            response_time = time.time() - start_time
+            self.search_stats['successful_searches'] += 1
+            
+            # Update average response time
+            total_successful = self.search_stats['successful_searches']
+            current_avg = self.search_stats['average_response_time']
+            self.search_stats['average_response_time'] = (
+                (current_avg * (total_successful - 1) + response_time) / total_successful
+            )
+            
+            # Log performance with concurrency info
+            logger.info(f"✅ TRUE CONCURRENT SEARCH COMPLETED - {response_time:.2f}s | User: {user_id} | Query: '{query}'")
+            record_request_performance(f"true_concurrent_search:{query}", response_time)
+            
+            # Record metrics
+            if self.metrics:
+                self.metrics.record_user_response_time(str(user_id), username, "search", response_time)
+                self.metrics.record_system_status("search_engine", "success")
+                # Record successful search
+                self.metrics.record_search_request("book_search", "success", response_time, len(results) if results else 0)
             
             if not results:
                 await searching_msg.edit_text(
@@ -196,7 +375,9 @@ class TelegramLibGenBot:
             # Store results for callbacks and update search status
             context.user_data['last_search_results'] = results
             await searching_msg.edit_text(
-                f"🎉 Found {len(results)} results for *'{query}'*"
+                f"🎉 **Found {len(results)} results for:** *'{query}'*\n\n"
+                f"📤 Sending your results now...\n"
+                f"🚀 **TRUE CONCURRENT PROCESSING** - other users can continue searching!"
             )
             
             # Check again before starting to send results
@@ -208,9 +389,25 @@ class TelegramLibGenBot:
             await self.send_paginated_results(update, context, results, page=0)
                 
         except Exception as e:
-            logger.error(f"Search error for query '{query}': {str(e)}")
+            self.search_stats['failed_searches'] += 1
+            response_time = time.time() - start_time
+            logger.error(f"❌ TRUE CONCURRENT SEARCH ERROR - User: {user_id} | Query: '{query}' | Time: {response_time:.2f}s | Error: {str(e)}")
+            record_request_performance(f"true_concurrent_search_error:{query}", response_time)
+            
+            # Record error metrics
+            if self.metrics:
+                self.metrics.record_user_response_time(str(user_id), username, "search_error", response_time)
+                self.metrics.record_system_status("search_engine", "error")
+                # Record failed search
+                self.metrics.record_search_request("book_search", "error", response_time, 0)
+            
             await searching_msg.edit_text(
-                "❌ Search failed. Please try again later."
+                f"❌ Search failed for: '{query}'\n\n"
+                "This might be due to:\n"
+                "• Network connectivity issues\n"
+                "• High server load\n"
+                "• Temporary mirror unavailability\n\n"
+                "Please try again in a moment."
             )
             
     async def send_paginated_results(self, update: Update, context: ContextTypes.DEFAULT_TYPE, results: List[Dict[str, Any]], page: int = 0) -> None:
@@ -562,6 +759,16 @@ class TelegramLibGenBot:
         title = book.get('title', 'Unknown Title')
         md5_hash = book.get('md5')
         
+        # Get user information for logging
+        user_id = query.from_user.id if query.from_user else "Unknown"
+        username = query.from_user.username if query.from_user and query.from_user.username else "NoUsername"
+        book_size = book.get('size', 'Unknown')
+        book_author = book.get('author', 'Unknown')
+        book_format = book.get('extension', 'Unknown')
+        
+        # Log book request with detailed information
+        logger.info(f"📚 BOOK REQUEST - User ID: {user_id} | Username: @{username} | Book: '{title}' | Author: {book_author} | Size: {book_size} | Format: {book_format}")
+        
         if not md5_hash:
             # Show alternative search links for books without MD5
             alternative_links = await self.get_alternative_search_links(
@@ -588,13 +795,55 @@ class TelegramLibGenBot:
             return
         
         # Check if file sending is enabled
-        if self.feature_send_files and self.file_handler:
+        if self.feature_send_files and (self.file_handler or self.truly_parallel_file_handler):
+            # Check file size before attempting download
+            book_size_str = book.get('size', 'Unknown')
+            if book_size_str != 'Unknown':
+                try:
+                    # Parse size string (e.g., "30 MB", "4 MB", "1.2 GB")
+                    import re
+                    size_match = re.search(r'(\d+\.?\d*)\s*([A-Za-z]*)', str(book_size_str))
+                    if size_match:
+                        value = float(size_match.group(1))
+                        unit = size_match.group(2).upper() or 'B'
+                        
+                        # Convert to MB
+                        if unit in ['B', 'BYTES']:
+                            size_mb = value / (1024 * 1024)
+                        elif unit in ['KB', 'KILOBYTES', 'KBYTES']:
+                            size_mb = value / 1024
+                        elif unit in ['MB', 'MEGABYTES', 'MBYTES']:
+                            size_mb = value
+                        elif unit in ['GB', 'GIGABYTES', 'GBYTES']:
+                            size_mb = value * 1024
+                        else:
+                            size_mb = 0
+                        
+                        # Check if file is too large
+                        if size_mb > self.max_download_mb:
+                            logger.info(f"File too large: {size_mb:.1f}MB > {self.max_download_mb}MB, showing links instead")
+                            await self._show_download_links_only(query, context, book, title, md5_hash)
+                            return
+                except (ValueError, AttributeError):
+                    # If size parsing fails, try to download anyway
+                    pass
+            
             await self._send_book_file(query, context, book, title, md5_hash)
         else:
             await self._show_download_links_only(query, context, book, title, md5_hash)
     
     async def _send_book_file(self, query, context: ContextTypes.DEFAULT_TYPE, book: Dict[str, Any], title: str, md5_hash: str) -> None:
         """Send book file directly through Telegram."""
+        import time
+        
+        # Get user information for logging
+        user_id = query.from_user.id if query.from_user else "Unknown"
+        username = query.from_user.username if query.from_user and query.from_user.username else "NoUsername"
+        book_size = book.get('size', 'Unknown')
+        
+        # Log download start
+        logger.info(f"📥 DOWNLOAD START - User ID: {user_id} | Username: @{username} | Book: '{title}' | Size: {book_size}")
+        
         # Show downloading message
         await query.edit_message_text(f"📁 Downloading {title}...")
         
@@ -614,9 +863,39 @@ class TelegramLibGenBot:
                 return
             
             # Try to download and validate file
-            file_data = await self.file_handler.get_best_file_from_links(download_links, title)
+            # Log download progress start
+            logger.info(f"📊 DOWNLOAD PROGRESS - User ID: {user_id} | Username: @{username} | Book: '{title}' | Status: Starting download...")
+            
+            # Track download timing
+            download_start_time = time.time()
+            # Try truly parallel file handler first
+            file_data = None
+            try:
+                async with self.truly_parallel_file_handler as file_handler:
+                    file_data = await file_handler.get_best_file_from_links(download_links, title)
+            except Exception as e:
+                logger.warning(f"TrulyParallelFileHandler failed: {e}, trying fallback FileHandler")
+                
+            # Fallback to regular file handler if truly parallel fails
+            if not file_data and self.file_handler:
+                try:
+                    file_data = await self.file_handler.get_best_file_from_links(download_links, title)
+                except Exception as e:
+                    logger.warning(f"FileHandler fallback also failed: {e}")
+            
+            download_time = time.time() - download_start_time
             
             if file_data:
+                # Calculate download speed
+                file_size_mb = file_data['size'] / (1024 * 1024)
+                download_speed_mbps = file_size_mb / download_time if download_time > 0 else 0
+                
+                # Log download completion with speed
+                logger.info(f"✅ DOWNLOAD COMPLETE - User ID: {user_id} | Username: @{username} | Book: '{title}' | File Size: {file_size_mb:.2f}MB | Download Speed: {download_speed_mbps:.2f}MB/s | Format: {file_data['extension']}")
+                
+                # Track upload timing
+                upload_start_time = time.time()
+                
                 # Send file as document
                 await query.message.reply_document(
                     document=file_data['data'],
@@ -626,13 +905,52 @@ class TelegramLibGenBot:
                            f"✅ File sent successfully!"
                 )
                 
-                # Update the original message
+                upload_time = time.time() - upload_start_time
+                upload_speed_mbps = file_size_mb / upload_time if upload_time > 0 else 0
+                
+                # Log upload completion with speed
+                logger.info(f"📤 UPLOAD COMPLETE - User ID: {user_id} | Username: @{username} | Book: '{title}' | Upload Speed: {upload_speed_mbps:.2f}MB/s | Upload Time: {upload_time:.2f}s")
+                
+                # Update speed statistics
+                self.search_stats['total_downloads'] += 1
+                self.search_stats['total_uploads'] += 1
+                self.search_stats['total_download_size_mb'] += file_size_mb
+                self.search_stats['total_upload_size_mb'] += file_size_mb
+                
+                # Update average download speed
+                total_downloads = self.search_stats['total_downloads']
+                current_avg_download = self.search_stats['average_download_speed']
+                self.search_stats['average_download_speed'] = (
+                    (current_avg_download * (total_downloads - 1) + download_speed_mbps) / total_downloads
+                )
+                
+                # Update average upload speed
+                total_uploads = self.search_stats['total_uploads']
+                current_avg_upload = self.search_stats['average_upload_speed']
+                self.search_stats['average_upload_speed'] = (
+                    (current_avg_upload * (total_uploads - 1) + upload_speed_mbps) / total_uploads
+                )
+                
+                # Update the original message with speed metrics
                 await query.edit_message_text(
                     f"✅ File sent successfully!\n\n"
                     f"📚 **{title}**\n"
-                    f"📄 {file_data['extension'].upper()}  •  💾 {file_data['size']:,} bytes"
+                    f"📄 **Format:** {file_data['extension'].upper()}\n"
+                    f"💾 **Size:** {file_data['size']:,} bytes\n\n"
+                    f"📊 **Performance Metrics:**\n"
+                    f"⬇️ **Download Speed:** {download_speed_mbps:.2f} MB/s\n"
+                    f"⬆️ **Upload Speed:** {upload_speed_mbps:.2f} MB/s\n"
+                    f"⏱️ **Download Time:** {download_time:.2f}s\n"
+                    f"⏱️ **Upload Time:** {upload_time:.2f}s\n\n"
+                    f"📈 **Overall Stats:**\n"
+                    f"⬇️ **Avg Download Speed:** {self.search_stats['average_download_speed']:.2f} MB/s\n"
+                    f"⬆️ **Avg Upload Speed:** {self.search_stats['average_upload_speed']:.2f} MB/s\n"
+                    f"📊 **Total Downloads:** {self.search_stats['total_downloads']}\n"
+                    f"📊 **Total Uploads:** {self.search_stats['total_uploads']}"
                 )
             else:
+                # Log why download failed
+                logger.warning(f"❌ DOWNLOAD FAILED - User ID: {user_id} | Username: @{username} | Book: '{title}' | Reason: No file data returned from download")
                 # Fallback to showing links
                 await self._show_download_links_only(query, context, book, title, md5_hash)
                 
@@ -654,6 +972,14 @@ class TelegramLibGenBot:
     
     async def _show_download_links_only(self, query, context: ContextTypes.DEFAULT_TYPE, book: Dict[str, Any], title: str, md5_hash: str) -> None:
         """Show download links only (fallback method)."""
+        # Get user information for logging
+        user_id = query.from_user.id if query.from_user else "Unknown"
+        username = query.from_user.username if query.from_user and query.from_user.username else "NoUsername"
+        book_size = book.get('size', 'Unknown')
+        
+        # Log download links request
+        logger.info(f"🔗 DOWNLOAD LINKS - User ID: {user_id} | Username: @{username} | Book: '{title}' | Size: {book_size} | Reason: File too large or send disabled")
+        
         # Show getting links message
         await query.edit_message_text(f"🔗 Getting links for *{title}*...")
         
@@ -684,6 +1010,9 @@ class TelegramLibGenBot:
             
             links_text += f"🔍 **MD5:** `{md5_hash}`\n\n"
             links_text += "📋 Copy links to browser"
+            
+            # Log successful completion of download links display
+            logger.info(f"✅ LINKS DISPLAYED - User ID: {user_id} | Username: @{username} | Book: '{title}' | Links Count: {len(download_links[:self.max_links_per_book])} | Size: {book_size}")
             
             await query.edit_message_text(
                 links_text,
@@ -823,11 +1152,32 @@ class TelegramLibGenBot:
                     max_bytes = int(self.max_download_mb * 1024 * 1024)
                     buffer = BytesIO()
                     downloaded = 0
+                    
+                    # Set up percentage tracking for console
+                    content_length = get_resp.headers.get('Content-Length')
+                    total_size = int(content_length) if content_length else None
+                    last_reported_percent = -1
+                    
                     async for chunk in get_resp.content.iter_chunked(1024 * 64):
                         if not chunk:
                             continue
                         buffer.write(chunk)
                         downloaded += len(chunk)
+                        
+                        # Show percentage progress
+                        if total_size:
+                            current_percent = int((downloaded / total_size) * 100)
+                            if current_percent != last_reported_percent and current_percent % 20 == 0:
+                                size_mb = downloaded / (1024 * 1024)
+                                total_mb = total_size / (1024 * 1024)
+                                print(f"🤖 Bot download progress: {current_percent}% ({size_mb:.1f}MB / {total_mb:.1f}MB) - {filename}")
+                                last_reported_percent = current_percent
+                        else:
+                            # If no total size, show downloaded amount every 10MB
+                            if downloaded % (10 * 1024 * 1024) == 0:
+                                size_mb = downloaded / (1024 * 1024)
+                                print(f"🤖 Bot downloaded: {size_mb:.1f}MB - {filename}")
+                        
                         if downloaded > max_bytes:
                             await update.message.reply_text(
                                 "Download too large. Use link above."
@@ -874,8 +1224,8 @@ class TelegramLibGenBot:
         
             
     def run(self) -> None:
-        """Start the bot."""
-        logger.info("Starting Telegram LibGen Bot...")
+        """Start the bot with optimized concurrency settings."""
+        logger.info("Starting Telegram LibGen Bot with concurrent processing...")
         
         # Configure proxy if available
         http_proxy = os.getenv('HTTP_PROXY')
@@ -888,13 +1238,20 @@ class TelegramLibGenBot:
             request = HTTPXRequest(proxy_url=proxy_url)
             application = Application.builder().token(self.token).request(request).build()
         else:
-            logger.info("🌐 No proxy configured, using direct connection")
-            application = Application.builder().token(self.token).build()
+            # Use optimized HTTPXRequest for better concurrency
+            request = HTTPXRequest(
+                connection_pool_size=100,  # Increased connection pool
+                read_timeout=30,
+                write_timeout=30,
+                connect_timeout=30
+            )
+            application = Application.builder().token(self.token).request(request).build()
         
         # Add handlers based on feature flags
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
         application.add_handler(CommandHandler("search", self.search_command))
+        application.add_handler(CommandHandler("stats", self.stats_command))
         
         if self.feature_stop_command:
             application.add_handler(CommandHandler("stop", self.stop_command))
@@ -904,9 +1261,18 @@ class TelegramLibGenBot:
             
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
-        # Start the bot
-        logger.info("🤖 Bot is running...")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Configure concurrency settings
+        logger.info("Configuring bot for concurrent processing...")
+        logger.info(f"Max connections: 100, Keep-alive: 20, Timeout: 30s")
+        
+        # Start the bot with optimized polling settings
+        logger.info("Bot is running with concurrent processing enabled...")
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,  # Clear any pending updates
+            close_loop=False,  # Keep event loop running for concurrency
+            stop_signals=None  # Handle signals manually for graceful shutdown
+        )
 
 
 def main():
@@ -923,11 +1289,19 @@ def main():
     bot = TelegramLibGenBot(bot_token)
     
     try:
+        logger.info("Starting optimized Telegram LibGen Bot...")
         bot.run()
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
     except Exception as e:
-        logger.error(f"❌ Bot error: {str(e)}")
+        logger.error(f"Bot error: {str(e)}")
+    finally:
+        # Cleanup HTTP client resources
+        try:
+            close_http_client()
+            logger.info("HTTP client resources cleaned up")
+        except Exception as e:
+            logger.warning(f"Error during cleanup: {str(e)}")
         
 
 if __name__ == '__main__':

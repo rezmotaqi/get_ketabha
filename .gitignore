@@ -38,6 +38,11 @@ venv.bak/
 .env.local
 .env.*.local
 
+# Sensitive files
+secure/
+.htpasswd*
+credentials.txt
+
 # Logs
 logs/
 *.log
@@ -122,9 +127,13 @@ tmp/
 # Development files
 dev/
 development/
-test_*.py
-*_test.py
-tests/
+# Test files are now organized in tests/ directory
+# test_*.py
+# *_test.py
+# tests/
 
 # Documentation build
 docs/_build/
+*nginx*
+
+system_status.txt

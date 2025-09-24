@@ -2,7 +2,6 @@
 # Telegram LibGen Bot - Docker Compose Configuration
 # =============================================================================
 
-version: '3.8'
 
 services:
   # Main Telegram Bot Service
@@ -13,6 +12,16 @@ services:
       target: production
     container_name: telegram-libgen-bot
     restart: unless-stopped
+    # Network optimizations
+    sysctls:
+      - net.core.rmem_max=134217728
+      - net.core.wmem_max=134217728
+      - net.ipv4.tcp_rmem=4096 65536 134217728
+      - net.ipv4.tcp_wmem=4096 65536 134217728
+      - net.core.netdev_max_backlog=5000
+      - net.ipv4.tcp_congestion_control=bbr
+    # Enable privileged mode for sysctl changes
+    privileged: true
     environment:
       # Load environment variables from .env file
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
@@ -85,6 +94,64 @@ services:
     profiles:
       - dev
     command: ["python", "main.py"]
+
+  # Performance-optimized service
+  libgen-bot-perf:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: performance
+    container_name: telegram-libgen-bot-perf
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LIBGEN_MAX_RESULTS=${LIBGEN_MAX_RESULTS:-200}
+      - BOT_BOOKS_PER_PAGE=${BOT_BOOKS_PER_PAGE:-5}
+      - LIBGEN_SEARCH_TIMEOUT=${LIBGEN_SEARCH_TIMEOUT:-30}
+      - LIBGEN_MAX_RETRIES=${LIBGEN_MAX_RETRIES:-1}
+      - BOT_DOWNLOAD_LINKS_TIMEOUT=${BOT_DOWNLOAD_LINKS_TIMEOUT:-10}
+      - BOT_MAX_LINKS_PER_BOOK=${BOT_MAX_LINKS_PER_BOOK:-8}
+      - BOT_MAX_ALTERNATIVE_LINKS=${BOT_MAX_ALTERNATIVE_LINKS:-3}
+      - BOT_BOOK_PROCESSING_DELAY=${BOT_BOOK_PROCESSING_DELAY:-0.1}
+      - BOT_CANCELLATION_CHECK_INTERVAL=${BOT_CANCELLATION_CHECK_INTERVAL:-0.25}
+      - BOT_CANCELLATION_CHECKS_COUNT=${BOT_CANCELLATION_CHECKS_COUNT:-20}
+      - FEATURE_DOWNLOAD_LINKS=${FEATURE_DOWNLOAD_LINKS:-true}
+      - FEATURE_ALTERNATIVE_SEARCH=${FEATURE_ALTERNATIVE_SEARCH:-true}
+      - FEATURE_PAGINATION=${FEATURE_PAGINATION:-true}
+      - FEATURE_STOP_COMMAND=${FEATURE_STOP_COMMAND:-true}
+      - LIBGEN_RESOLVE_FINAL_URLS=${LIBGEN_RESOLVE_FINAL_URLS:-true}
+      - HTTP_USER_AGENT=${HTTP_USER_AGENT:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36}
+      - BOT_NAME=${BOT_NAME:-LibGen Search Bot}
+      - BOT_DESCRIPTION=${BOT_DESCRIPTION:-Search for books by sending me a book title, author name, or ISBN.}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+    volumes:
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    networks:
+      - libgen-network
+    profiles:
+      - performance
+    # Network optimizations
+    sysctls:
+      - net.core.rmem_max=134217728
+      - net.core.wmem_max=134217728
+      - net.ipv4.tcp_rmem=4096 65536 134217728
+      - net.ipv4.tcp_wmem=4096 65536 134217728
+      - net.core.netdev_max_backlog=5000
+      - net.ipv4.tcp_congestion_control=bbr
+    # Enable privileged mode for sysctl changes
+    privileged: true
+    # Resource limits for performance
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
 
   # Alpine variant for smaller footprint
   libgen-bot-alpine:

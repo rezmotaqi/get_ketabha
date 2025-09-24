@@ -1,307 +1,286 @@
-# Telegram LibGen Bot 📚🤖
+# Telegram LibGen Bot
 
-A Telegram bot that searches LibGen sites for books and returns download links. This bot helps users find and access books from various LibGen mirrors with a simple and intuitive interface.
+A powerful Telegram bot that searches Library Genesis (LibGen) for books and provides download links. Built with Python, featuring advanced monitoring, Docker support, and performance optimizations.
 
-## Features ✨
+## 🚀 Features
 
-- 🔍 **Smart Search**: Search by title, author, ISBN, or keywords
-- 🌐 **Multiple Mirrors**: Automatically tries different LibGen mirrors for reliability
-- 📋 **Rich Results**: Displays book details including author, year, size, format, and pages
-- 🔗 **Direct Download Links**: Provides working download links from multiple sources
-- 📁 **File Sending**: Send book files directly through Telegram (optional)
-- ⚡ **Fast & Reliable**: Asynchronous processing for quick responses
-- 🎯 **User Friendly**: Simple commands and intuitive interface
-- 📝 **Detailed Logging**: Comprehensive logging for debugging and monitoring
+### Core Functionality
+- **Book Search**: Search LibGen by title, author, or ISBN
+- **Download Links**: Get direct download links for found books
+- **Alternative Search**: Automatic fallback to alternative LibGen mirrors
+- **Pagination**: Navigate through search results with inline keyboards
+- **Stop Command**: Cancel ongoing searches
+- **Smart Formatting**: Clean, readable book information display
 
-## Quick Start 🚀
+### Advanced Features
+- **Real-time Monitoring**: Prometheus metrics integration
+- **Performance Tracking**: Request duration and success rate monitoring
+- **Concurrent Processing**: Parallel file handling for better performance
+- **Error Handling**: Robust error recovery and user feedback
+- **Docker Support**: Multiple deployment configurations
+- **Logging**: Comprehensive logging with different levels
+
+## 📋 Requirements
+
+- Python 3.8+
+- Telegram Bot Token
+- Internet connection
+- Docker (optional, for containerized deployment)
+
+## 🛠️ Installation
+
+### Method 1: Docker (Recommended)
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/telegram-libgen-bot.git
-   cd telegram-libgen-bot
+   git clone <repository-url>
+   cd get_ketabha
    ```
 
-2. **Install dependencies**
+2. **Create environment file**
+   ```bash
+   cp env.template .env
+   # Edit .env with your Telegram bot token
+   ```
+
+3. **Start with Docker Compose**
+   ```bash
+   # Production deployment
+   docker-compose up -d
+
+   # Development with hot reload
+   docker-compose --profile dev up -d
+
+   # Performance-optimized deployment
+   docker-compose --profile performance up -d
+
+   # Alpine variant (smaller footprint)
+   docker-compose --profile alpine up -d
+   ```
+
+### Method 2: Local Installation
+
+1. **Install dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure the bot**
+2. **Set up environment**
    ```bash
    cp env.template .env
-   # Edit .env and add your Telegram Bot Token
+   # Edit .env with your configuration
    ```
 
-4. **Run the bot**
+3. **Run the bot**
    ```bash
    python main.py
    ```
 
-## Setup Instructions 📋
-
-### 1. Create a Telegram Bot
-
-1. Open Telegram and search for `@BotFather`
-2. Send `/newbot` to create a new bot
-3. Follow the instructions to set a name and username
-4. Copy the bot token (looks like `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-
-### 2. Install Python Dependencies
-
-Make sure you have Python 3.8 or higher installed, then:
-
-```bash
-# Install required packages
-pip install -r requirements.txt
-```
-
-### 3. Configure Environment Variables
-
-Copy the template and edit it:
-
-```bash
-cp env.template .env
-```
-
-Edit `.env` file:
-```env
-TELEGRAM_BOT_TOKEN=your_actual_bot_token_here
-LOG_LEVEL=INFO
-MAX_SEARCH_RESULTS=25
-SEARCH_TIMEOUT=30
-```
-
-### 4. Run the Bot
-
-```bash
-# Method 1: Using main.py
-python main.py
-
-# Method 2: Running the bot module directly
-python -m src.bot
-
-# Method 3: For development with logs visible
-python src/bot.py
-```
-
-## Project Structure 🏗️
-
-```
-telegram-libgen-bot/
-├── src/
-│   ├── bot.py                 # Main bot logic
-│   ├── libgen_search.py       # LibGen search functionality
-│   └── utils/
-│       ├── __init__.py
-│       ├── book_formatter.py  # Message formatting
-│       └── logger.py          # Logging utilities
-├── logs/                      # Log files (created automatically)
-├── main.py                    # Entry point
-├── requirements.txt           # Python dependencies
-├── env.template              # Environment variables template
-├── .env                      # Your actual environment variables (gitignored)
-├── .gitignore               # Git ignore rules
-└── README.md               # This file
-```
-
-## Usage 💬
-
-### Bot Commands
-
-- `/start` - Show welcome message and instructions
-- `/help` - Display help information
-- `/search <query>` - Search for books (e.g., `/search python programming`)
-
-### Searching
-
-You can search in multiple ways:
-
-1. **Send a message**: Just type your search query
-   ```
-   Clean Code Robert Martin
-   ```
-
-2. **Use the search command**: 
-   ```
-   /search Design Patterns
-   ```
-
-3. **Search by ISBN**: 
-   ```
-   978-0134685991
-   ```
-
-### Example Searches
-
-- `python programming`
-- `Clean Code Robert Martin`
-- `1984 George Orwell`
-- `978-0-7432-7356-5`
-- `machine learning`
-- `JavaScript: The Good Parts`
-
-## File Sending Feature 📁
-
-The bot can send book files directly through Telegram instead of just providing download links. This feature is disabled by default but can be enabled via environment variables.
-
-### Enable File Sending
-
-Add these variables to your `.env` file:
-
-```env
-# Enable file sending feature
-FEATURE_SEND_FILES=true
-
-# File size limits (in MB)
-FILE_MIN_SIZE_MB=0.1
-FILE_MAX_SIZE_MB=50
-
-# Download and validation timeouts (in seconds)
-FILE_DOWNLOAD_TIMEOUT=60
-FILE_VALIDATION_TIMEOUT=30
-
-# Retry attempts for failed downloads
-FILE_RETRY_ATTEMPTS=2
-```
-
-### How It Works
-
-1. **Search for books** as usual
-2. **Click "Links" button** for any book
-3. **Bot downloads and validates** the file automatically
-4. **File is sent directly** through Telegram if valid
-5. **Falls back to links** if file download/validation fails
-
-### File Validation
-
-The bot validates files before sending:
-- ✅ **File size** (minimum 0.1MB, maximum 50MB)
-- ✅ **File format** (PDF, EPUB, MOBI, etc.)
-- ✅ **File integrity** (not corrupted)
-- ✅ **MIME type** verification
-
-### Supported Formats
-
-- **PDF** - `.pdf`
-- **EPUB** - `.epub`
-- **MOBI** - `.mobi`
-- **AZW3** - `.azw3`
-- **DJVU** - `.djvu`
-- **TXT** - `.txt`
-- **DOC/DOCX** - `.doc`, `.docx`
-- **RTF** - `.rtf`
-- **FB2** - `.fb2`
-- **LIT** - `.lit`
-- **PDB** - `.pdb`
-- **CHM** - `.chm`
-
-## Configuration Options ⚙️
+## ⚙️ Configuration
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TELEGRAM_BOT_TOKEN` | Your Telegram bot token | Required |
-| `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | INFO |
-| `MAX_SEARCH_RESULTS` | Maximum search results to process | 25 |
-| `SEARCH_TIMEOUT` | Timeout for search requests (seconds) | 30 |
-| `MAX_RETRIES` | Maximum retry attempts for failed requests | 3 |
-| `MAX_RESULTS_PER_MESSAGE` | Results shown per message | 5 |
-| `REQUESTS_PER_SECOND` | Rate limiting for requests | 2 |
-| `FEATURE_SEND_FILES` | Enable sending files directly | false |
-| `FILE_MIN_SIZE_MB` | Minimum file size to send | 0.1 |
-| `FILE_MAX_SIZE_MB` | Maximum file size to send | 50 |
-
-### LibGen Mirrors
-
-The bot automatically tries multiple working LibGen mirrors in order:
-- libgen.la (primary)
-- libgen.li
-- libgen.vg
-- libgen.bz
-- libgen.gl
-
-These mirrors are based on real-time analysis of working LibGen sites. You can customize the mirror list in your `.env` file using `LIBGEN_SEARCH_MIRRORS` and `LIBGEN_DOWNLOAD_MIRRORS` variables.
-
-## Development 🛠️
-
-### Running in Development Mode
+Create a `.env` file with the following variables:
 
 ```bash
-# Enable debug logging
-export LOG_LEVEL=DEBUG  # On Windows: set LOG_LEVEL=DEBUG
-python main.py
+# Required
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+
+# Optional Configuration
+LOG_LEVEL=INFO
+LIBGEN_MAX_RESULTS=200
+BOT_BOOKS_PER_PAGE=5
+LIBGEN_SEARCH_TIMEOUT=30
+LIBGEN_MAX_RETRIES=1
+BOT_DOWNLOAD_LINKS_TIMEOUT=10
+BOT_MAX_LINKS_PER_BOOK=8
+BOT_MAX_ALTERNATIVE_LINKS=3
+BOT_BOOK_PROCESSING_DELAY=0.1
+BOT_CANCELLATION_CHECK_INTERVAL=0.25
+BOT_CANCELLATION_CHECKS_COUNT=20
+
+# Feature Flags
+FEATURE_DOWNLOAD_LINKS=true
+FEATURE_ALTERNATIVE_SEARCH=true
+FEATURE_PAGINATION=true
+FEATURE_STOP_COMMAND=true
+LIBGEN_RESOLVE_FINAL_URLS=true
+
+# Bot Information
+BOT_NAME=LibGen Search Bot
+BOT_DESCRIPTION=Search for books by sending me a book title, author name, or ISBN.
+
+# HTTP Configuration
+HTTP_USER_AGENT=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36
+
+# Proxy Settings (optional)
+HTTP_PROXY=
+HTTPS_PROXY=
 ```
 
-### Testing the Search Module
+## 📱 Usage
+
+### Bot Commands
+
+- **Start**: `/start` - Initialize the bot
+- **Help**: `/help` - Show available commands
+- **Stop**: `/stop` - Cancel ongoing search operations
+
+### Searching for Books
+
+Simply send a message with:
+- Book title
+- Author name
+- ISBN number
+- Any combination of the above
+
+### Example Interactions
+
+```
+User: "Python programming"
+Bot: [Shows search results with pagination]
+
+User: "Clean Code by Robert Martin"
+Bot: [Shows specific book with download links]
+
+User: "9780132350884"
+Bot: [Shows book by ISBN]
+```
+
+## 📊 Monitoring
+
+The bot includes comprehensive monitoring capabilities:
+
+### Prometheus Metrics
+- Search request counts and duration
+- Download link resolution metrics
+- Error rates and types
+- Active user tracking
+- System resource usage
+
+### Accessing Metrics
+```bash
+# View metrics endpoint
+curl http://localhost:8000/metrics
+
+# Setup monitoring stack
+./monitoring/setup_monitoring.sh
+```
+
+### Key Metrics
+- `search_requests_total` - Total search requests
+- `search_duration_seconds` - Search duration histogram
+- `active_users` - Number of active users
+- `errors_total` - Error counts by type
+- `download_links_resolved` - Download link resolution success rate
+
+## 🏗️ Architecture
+
+```
+get_ketabha/
+├── src/                    # Source code
+│   ├── bot.py             # Main bot implementation
+│   ├── libgen_search.py   # LibGen search logic
+│   └── utils/             # Utility modules
+├── monitoring/            # Monitoring and metrics
+├── docker/               # Docker configuration
+├── nginx/                # Nginx configuration
+├── logs/                 # Log files
+├── docker-compose.yml    # Docker Compose configuration
+├── Dockerfile           # Multi-stage Docker build
+└── main.py              # Application entry point
+```
+
+## 🐳 Docker Deployment
+
+### Available Services
+
+1. **libgen-bot** - Production service
+2. **libgen-bot-dev** - Development with hot reload
+3. **libgen-bot-perf** - Performance-optimized
+4. **libgen-bot-alpine** - Minimal Alpine variant
+5. **log-aggregator** - Log aggregation (optional)
+
+### Service Profiles
 
 ```bash
-# Test the LibGen search functionality
-python src/libgen_search.py
+# Development
+docker-compose --profile dev up -d
+
+# Performance
+docker-compose --profile performance up -d
+
+# Alpine (minimal)
+docker-compose --profile alpine up -d
+
+# With logging
+docker-compose --profile logging up -d
 ```
 
-### Project Dependencies
+## 🔧 Development
 
-Key dependencies include:
-- `python-telegram-bot`: Telegram Bot API wrapper
-- `aiohttp`: Async HTTP client for web requests
-- `beautifulsoup4`: HTML parsing for scraping
-- `python-dotenv`: Environment variable management
+### Running Tests
+```bash
+# Run monitoring tests
+python monitoring/test_metrics.py
 
-## Troubleshooting 🔧
+# Run with pytest (if installed)
+pytest
+```
+
+### Code Structure
+- **`src/bot.py`** - Main bot class and handlers
+- **`src/libgen_search.py`** - LibGen search implementation
+- **`src/utils/`** - Utility modules for file handling, logging, etc.
+- **`monitoring/`** - Prometheus metrics and monitoring
+
+### Adding New Features
+1. Implement feature in appropriate module
+2. Add configuration options to environment variables
+3. Update monitoring metrics if needed
+4. Test with Docker deployment
+5. Update documentation
+
+## 📝 Logging
+
+Logs are stored in the `logs/` directory:
+- `bot.log` - General bot operations
+- `errors.log` - Error messages
+- `monitoring.log` - Monitoring and metrics
+
+## 🚨 Troubleshooting
 
 ### Common Issues
 
-1. **"TELEGRAM_BOT_TOKEN not found"**
-   - Make sure you've created a `.env` file
-   - Check that your bot token is correctly set in `.env`
+1. **Bot not responding**
+   - Check Telegram bot token
+   - Verify internet connection
+   - Check logs for errors
 
-2. **"No results found"**
-   - Try different search terms
-   - Check if LibGen mirrors are accessible
-   - Some mirrors might be temporarily down
+2. **Search not working**
+   - Verify LibGen sites are accessible
+   - Check timeout settings
+   - Review error logs
 
-3. **"Search timeout"**
-   - Increase `SEARCH_TIMEOUT` in your `.env` file
-   - Check your internet connection
-
-4. **Import errors**
-   - Make sure all dependencies are installed: `pip install -r requirements.txt`
-   - Check Python version (requires 3.8+)
-
-5. **"No download links found"**
-   - The bot now follows LibGen's complete flow (ads.php → file page → get.php)
-   - Some books might not have working download links
-   - Try using the MD5 hash manually on LibGen sites
-
-6. **"404 errors from LibGen"**
-   - LibGen mirrors change frequently - the bot uses current working mirrors
-   - If persistent, check the `LIBGEN_SEARCH_MIRRORS` in your .env file
-   - Update to latest working mirrors: libgen.la, libgen.li, libgen.vg
-
-### Logging
-
-Logs are automatically saved to:
-- `logs/bot.log` - General application logs
-- `logs/errors.log` - Error logs only
-
-You can also see real-time logs in the console when running the bot.
+3. **Docker issues**
+   - Ensure Docker and Docker Compose are installed
+   - Check container logs: `docker-compose logs libgen-bot`
+   - Verify environment variables
 
 ### Debug Mode
-
-Enable debug logging for detailed information:
 ```bash
-# In your .env file
+# Enable debug logging
+LOG_LEVEL=DEBUG docker-compose up
+
+# Or set in .env file
 LOG_LEVEL=DEBUG
 ```
 
-## Legal Notice ⚖️
+## 📄 License
 
-This bot is intended for educational and research purposes only. Users are responsible for complying with their local laws regarding copyrighted material. The authors of this bot do not encourage or condone piracy.
+This project is for educational purposes. Please respect LibGen's terms of service and copyright laws in your jurisdiction.
 
-## Contributing 🤝
-
-Contributions are welcome! Please feel free to:
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
@@ -309,58 +288,13 @@ Contributions are welcome! Please feel free to:
 4. Add tests if applicable
 5. Submit a pull request
 
-### Development Setup
+## 📞 Support
 
-```bash
-# Clone your fork
-git clone https://github.com/yourusername/telegram-libgen-bot.git
-cd telegram-libgen-bot
-
-# Install development dependencies
-pip install -r requirements.txt
-
-# Install pre-commit hooks (optional)
-pip install pre-commit
-pre-commit install
-```
-
-## License 📄
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Changelog 📝
-
-### Version 1.1.0 (LibGen Integration Fixes)
-- ✅ **Fixed LibGen search patterns**: Updated to use correct index.php endpoint with proper parameters
-- ✅ **Improved HTML parsing**: Now correctly parses the actual LibGen table structure  
-- ✅ **Enhanced download links**: Follows the complete LibGen flow (search → results → get.php final download)
-- ✅ **Updated working mirrors**: Uses currently active LibGen mirrors (.la, .li, .vg, .bz, .gl)
-- ✅ **Better error handling**: Improved fallback mechanisms for failed requests
-- ✅ **Real download extraction**: Properly extracts get.php links with keys for direct downloads
-- ✅ **Mirror diversity**: Support for RandomBook and Anna's Archive alternative mirrors
-
-### Version 1.0.0 (Initial Release)
-- Basic search functionality
-- Multiple LibGen mirror support
-- Telegram bot interface
-- Rich message formatting
-- Comprehensive logging
-- Download link extraction
-
-## Support 💬
-
-If you encounter any issues or have questions:
-
-1. Check the [Troubleshooting](#troubleshooting-🔧) section
-2. Look through existing [GitHub Issues](https://github.com/yourusername/telegram-libgen-bot/issues)
-3. Create a new issue with detailed information about your problem
-
-## Acknowledgments 🙏
-
-- LibGen community for maintaining the mirrors
-- Python Telegram Bot library developers
-- Beautiful Soup and aiohttp library maintainers
+For issues and questions:
+1. Check the troubleshooting section
+2. Review logs for error messages
+3. Open an issue with detailed information
 
 ---
 
-**Happy Reading! 📚**
+**Note**: This bot is designed to help users find books for educational and research purposes. Please ensure compliance with local laws and respect intellectual property rights.
