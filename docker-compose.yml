@@ -12,16 +12,7 @@ services:
       target: production
     container_name: telegram-libgen-bot
     restart: unless-stopped
-    # Network optimizations
-    sysctls:
-      - net.core.rmem_max=134217728
-      - net.core.wmem_max=134217728
-      - net.ipv4.tcp_rmem=4096 65536 134217728
-      - net.ipv4.tcp_wmem=4096 65536 134217728
-      - net.core.netdev_max_backlog=5000
-      - net.ipv4.tcp_congestion_control=bbr
-    # Enable privileged mode for sysctl changes
-    privileged: true
+    # Network optimizations removed due to sysctl compatibility issues
     environment:
       # Load environment variables from .env file
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
@@ -133,16 +124,7 @@ services:
       - libgen-network
     profiles:
       - performance
-    # Network optimizations
-    sysctls:
-      - net.core.rmem_max=134217728
-      - net.core.wmem_max=134217728
-      - net.ipv4.tcp_rmem=4096 65536 134217728
-      - net.ipv4.tcp_wmem=4096 65536 134217728
-      - net.core.netdev_max_backlog=5000
-      - net.ipv4.tcp_congestion_control=bbr
-    # Enable privileged mode for sysctl changes
-    privileged: true
+    # Network optimizations removed due to sysctl compatibility issues
     # Resource limits for performance
     deploy:
       resources:
