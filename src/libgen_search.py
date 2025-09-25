@@ -15,8 +15,8 @@ from bs4 import BeautifulSoup
 import logging
 from dotenv import load_dotenv
 
-from utils.logger import setup_logger
-from utils.http_client import get_http_client, record_request_performance
+from .utils.logger import setup_logger
+from .utils.http_client import get_http_client, record_request_performance
 
 # Load environment variables
 load_dotenv()
@@ -32,15 +32,20 @@ class LibGenSearcher:
         self.timeout = timeout or int(os.getenv('LIBGEN_SEARCH_TIMEOUT', '30'))
         self.max_retries = max_retries or int(os.getenv('LIBGEN_MAX_RETRIES', '1'))
         
-        # Load mirrors from environment variables - Optimized for English Book Retrieval (Sep 2025)
-        # Priority order: Best performing mirrors first for English books
+        # Load mirrors from environment variables - Optimized for maximum reliability (Sep 2025)
+        # Priority order: Most reliable and fastest mirrors first, with fallback tiers
         search_mirrors_env = os.getenv('LIBGEN_SEARCH_MIRRORS', 
-                                       'https://libgen.la,https://libgen.li,https://libgen.gl,https://libgen.vg,https://libgen.bz,http://libgen.rs,http://gen.lib.rus.ec,https://libgen.fun,https://libgen.is')
+                                       'https://libgen.la,https://libgen.li,https://libgen.gl,https://libgen.vg,https://libgen.bz,https://libgen.is,https://libgen.pw,https://libgen.ee,http://libgen.rs,http://gen.lib.rus.ec,https://libgen.fun,https://libgen.st')
         self.libgen_mirrors = [url.strip() for url in search_mirrors_env.split(',') if url.strip()]
         
         download_mirrors_env = os.getenv('LIBGEN_DOWNLOAD_MIRRORS', 
-                                         'https://libgen.la,https://libgen.li,https://libgen.gl,https://libgen.vg,https://libgen.bz,http://libgen.rs,http://gen.lib.rus.ec,https://libgen.fun,https://libgen.is,http://library.lol')
+                                         'https://libgen.la,https://libgen.li,https://libgen.gl,https://libgen.vg,https://libgen.bz,https://libgen.is,https://libgen.pw,https://libgen.ee,http://libgen.rs,http://gen.lib.rus.ec,https://libgen.fun,https://libgen.st,http://library.lol,http://libgen.lc')
         self.download_mirrors = [url.strip() for url in download_mirrors_env.split(',') if url.strip()]
+        
+        # Mirror reliability tracking for intelligent fallback
+        self.mirror_reliability = {}
+        self.mirror_response_times = {}
+        self.failed_mirrors = set()
 
         # Control whether to resolve get.php links to final URLs and filenames
         resolve_env = os.getenv('LIBGEN_RESOLVE_FINAL_URLS', 'true').strip().lower()
@@ -83,6 +88,33 @@ class LibGenSearcher:
         if max_results is None:
             max_results = int(os.getenv('LIBGEN_MAX_RESULTS', '200'))
             
+        # Check if query is an MD5 hash (32 hex characters)
+        import re
+        if re.match(r'^[a-f0-9]{32}$', query.lower()):
+            logger.info(f"🔍 MD5 hash detected: {query}")
+            # For MD5 searches, try to get download links directly
+            try:
+                download_links = await self.get_download_links(query)
+                if download_links:
+                    # Create a mock book entry from the download links
+                    book_entry = {
+                        'title': f'Book with MD5: {query}',
+                        'author': 'Unknown',
+                        'year': 'Unknown',
+                        'extension': 'Unknown',
+                        'size': 'Unknown',
+                        'md5': query,
+                        'download_links': download_links
+                    }
+                    logger.info(f"✅ Found download links for MD5 {query}")
+                    return [book_entry]
+                else:
+                    logger.warning(f"❌ No download links found for MD5 {query}")
+                    return []
+            except Exception as e:
+                logger.error(f"❌ Error getting download links for MD5 {query}: {e}")
+                return []
+            
         # Check cache first
         cache_key = f"{query.lower().strip()}:{max_results}"
         current_time = time.time()
@@ -104,81 +136,41 @@ class LibGenSearcher:
         
         results = []
         
-        # Search all mirrors in TRUE parallel using asyncio.gather
-        search_tasks = []
-        for mirror in self.libgen_mirrors:
-            task = asyncio.create_task(self._search_mirror_async(mirror, query))
-            search_tasks.append((task, mirror))
+        # Get prioritized mirrors based on reliability and performance
+        prioritized_mirrors = self._get_prioritized_mirrors()
         
-        # Wait for ALL searches to complete in parallel
-        logger.info(f"🚀 Starting TRUE PARALLEL search across {len(self.libgen_mirrors)} mirrors...")
+        # SIMPLE SYNCHRONOUS SEARCH: Try mirrors one by one, return first result
+        logger.info(f"🚀 Starting SIMPLE search - trying mirrors one by one...")
         
-        # Use asyncio.gather to wait for all tasks simultaneously with timeout
-        try:
-            task_results = await asyncio.wait_for(
-                asyncio.gather(*[task for task, _ in search_tasks], return_exceptions=True),
-                timeout=30.0  # 30 second timeout for all mirrors
-            )
-        except asyncio.TimeoutError:
-            logger.warning("⚠️ Search timeout - some mirrors may not have responded")
-            # Get partial results from completed tasks
-            task_results = []
-            for task, _ in search_tasks:
-                if task.done():
-                    try:
-                        result = task.result()
-                        task_results.append(result)
-                    except Exception as e:
-                        task_results.append(e)
-                else:
-                    task.cancel()
-                    task_results.append(Exception("Task cancelled due to timeout"))
-        
-        # Process results from all mirrors
-        for i, (task, mirror) in enumerate(search_tasks):
+        for i, mirror in enumerate(prioritized_mirrors[:5]):  # Try first 5 mirrors
+            logger.info(f"🔄 Attempt {i + 1}/5: Trying {mirror}...")
+            
             try:
-                mirror_start = time.time()
-                mirror_results = task_results[i]
-                mirror_time = time.time() - mirror_start
+                # Search this mirror with 8-second timeout
+                result = await asyncio.wait_for(
+                    self._search_mirror_async(mirror, query),
+                    timeout=8.0
+                )
                 
-                # Handle exceptions
-                if isinstance(mirror_results, Exception):
-                    logger.warning(f"Failed to search {mirror}: {str(mirror_results)}")
-                    continue
-                
-                # Track mirror performance
-                if mirror not in self.search_stats['mirror_performance']:
-                    self.search_stats['mirror_performance'][mirror] = {
-                        'total_requests': 0,
-                        'successful_requests': 0,
-                        'average_response_time': 0.0
-                    }
-                
-                mirror_stats = self.search_stats['mirror_performance'][mirror]
-                mirror_stats['total_requests'] += 1
-                
-                if mirror_results:
-                    mirror_stats['successful_requests'] += 1
-                    # Update average response time
-                    current_avg = mirror_stats['average_response_time']
-                    total_successful = mirror_stats['successful_requests']
-                    mirror_stats['average_response_time'] = (
-                        (current_avg * (total_successful - 1) + mirror_time) / total_successful
-                    )
-                    
-                    results.extend(mirror_results)
-                    logger.info(f"✅ Found {len(mirror_results)} results from {mirror} in {mirror_time:.2f}s")
-                    record_request_performance(f"search_mirror:{mirror}", mirror_time)
+                if result and len(result) > 0:
+                    results = result
+                    logger.info(f"✅ SUCCESS! Got {len(result)} results from {mirror}")
+                    break
                 else:
-                    logger.info(f"❌ No results from {mirror}")
+                    logger.info(f"⚠️ No results from {mirror}, trying next...")
                     
+            except asyncio.TimeoutError:
+                logger.warning(f"⏰ Timeout on {mirror} (8s), trying next...")
+                continue
             except Exception as e:
-                logger.warning(f"Failed to process results from {mirror}: {str(e)}")
+                logger.warning(f"❌ Error from {mirror}: {e}, trying next...")
                 continue
                 
         # Remove duplicates based on MD5 hash
+        logger.info(f"🔄 Removing duplicates from {len(results)} results...")
         unique_results = self._remove_duplicates(results)
         final_results = unique_results[:max_results]
+        logger.info(f"✅ Deduplication complete: {len(unique_results)} unique results, returning {len(final_results)}")
         
         # Log comprehensive search results
         total_found = len(results)
@@ -230,7 +222,7 @@ class LibGenSearcher:
             logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
         
     async def _search_mirror_async(self, mirror: str, query: str) -> List[Dict[str, Any]]:
-        """Search a specific LibGen mirror asynchronously."""
+        """Search a specific LibGen mirror asynchronously with reliability tracking."""
         search_url = f"{mirror}/index.php"
         params = {
             'req': query,
@@ -242,22 +234,40 @@ class LibGenSearcher:
             'curtab': 'f'  # Files tab
         }
         
-        # Use optimized HTTP client
+        # Use optimized HTTP client with SSL verification bypass for problematic mirrors
+        ssl_verify = not any(problematic in mirror for problematic in ['libgen.fun', 'libgen.rs'])
+        
+        start_time = time.time()
+        success = False
+        response_time = 0
+        
         for attempt in range(self.max_retries):
             try:
-                response = self.http_client.get(search_url, params=params)
+                response = self.http_client.get(search_url, params=params, verify=ssl_verify)
+                response_time = time.time() - start_time
+                
                 if response.status_code == 200:
                     html = response.text
-                    return self._parse_search_results(html, mirror)
+                    results = self._parse_search_results(html, mirror)
+                    success = True
+                    logger.info(f"✅ Success from {mirror} in {response_time:.2f}s: {len(results)} results")
+                    return results
                 else:
                     logger.warning(f"HTTP {response.status_code} from {mirror}")
                     
             except Exception as e:
+                response_time = time.time() - start_time
                 logger.warning(f"Request error on attempt {attempt + 1} for {mirror}: {str(e)}")
                 
             if attempt < self.max_retries - 1:
                 await asyncio.sleep(1)  # Brief delay before retry
-                    
+        
+        # Update reliability tracking
+        self._update_mirror_reliability(mirror, success, response_time)
+        
+        if not success:
+            logger.warning(f"❌ All attempts failed for {mirror}")
+        
         return []
 
     async def _search_mirror(self, mirror: str, query: str, max_results: int) -> List[Dict[str, Any]]:
@@ -273,42 +283,17 @@ class LibGenSearcher:
             'curtab': 'f'  # Files tab
         }
         
-<<<<<<< HEAD
-        # Configure proxy if available
-        proxy = os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY')
+        # Use optimized HTTP client with SSL verification bypass for problematic mirrors
+        ssl_verify = not any(problematic in mirror for problematic in ['libgen.fun', 'libgen.rs'])
         
-        connector = None
-        if proxy:
-            connector = aiohttp.TCPConnector()
-            
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=self.timeout),
-            connector=connector
-        ) as session:
-            for attempt in range(self.max_retries):
-                try:
-                    async with session.get(search_url, params=params, proxy=proxy) as response:
-                        if response.status == 200:
-                            html = await response.text()
-                            return self._parse_search_results(html, mirror)
-                        else:
-                            logger.debug(f"HTTP {response.status} from {mirror}")
-                            
-                except asyncio.TimeoutError:
-                    logger.debug(f"Timeout on attempt {attempt + 1} for {mirror}")
-                except Exception as e:
-                    logger.debug(f"Request error on attempt {attempt + 1} for {mirror}: {str(e)}")
-=======
-        # Use optimized HTTP client
         for attempt in range(self.max_retries):
             try:
-                response = self.http_client.get(search_url, params=params)
+                response = self.http_client.get(search_url, params=params, verify=ssl_verify)
                 if response.status_code == 200:
                     html = response.text
                     return self._parse_search_results(html, mirror)
                 else:
                     logger.warning(f"HTTP {response.status_code} from {mirror}")
->>>>>>> 1ec37144ffcd49a053633c464ab6f87208a58587
                     
             except Exception as e:
                 logger.warning(f"Request error on attempt {attempt + 1} for {mirror}: {str(e)}")
@@ -477,7 +462,7 @@ class LibGenSearcher:
     async def get_download_links(self, md5_hash: str) -> List[Dict[str, str]]:
         """
         Get direct download links for a book using its MD5 hash.
-        Follows the LibGen pattern: ads.php -> file details page -> get.php final download
+        Tries mirrors one by one and returns first successful result.
         
         Args:
             md5_hash: MD5 hash of the book
@@ -487,23 +472,63 @@ class LibGenSearcher:
         """
         download_links = []
         
-        for mirror in self.download_mirrors:
+        # Try multiple mirrors to get diverse download sources
+        print(f"🔗 Collecting links from multiple mirrors for variety...")
+        successful_mirrors = 0
+        max_mirrors = 5  # Try up to 5 mirrors for variety
+        
+        for i, mirror in enumerate(self.download_mirrors[:max_mirrors]):
             try:
+                logger.info(f"🔗 Getting download links from mirror {i+1}/{max_mirrors}: {mirror}")
+                print(f"🔗 Mirror {i+1}/{max_mirrors}: {mirror}")
+                
                 # Try to get final download links following LibGen's pattern
-                links = await self._get_final_download_links(mirror, md5_hash)
-                download_links.extend(links)
+                links = await asyncio.wait_for(
+                    self._get_final_download_links(mirror, md5_hash), 
+                    timeout=3.0  # 3 seconds per mirror for speed
+                )
                 
-                # Also try the old method as fallback
-                fallback_links = await self._get_download_links_from_mirror(mirror, md5_hash)
-                download_links.extend(fallback_links)
+                if links:
+                    download_links.extend(links)
+                    successful_mirrors += 1
+                    logger.info(f"✅ Found {len(links)} download links from {mirror}")
+                    print(f"✅ Found {len(links)} links from {mirror} (Total: {len(download_links)})")
+                    
+                    # If we have enough links from different sources, we can return early
+                    if len(download_links) >= 8 and successful_mirrors >= 2:
+                        print(f"🚀 Got {len(download_links)} links from {successful_mirrors} mirrors - returning diverse set")
+                        break
+                else:
+                    logger.info(f"⚠️ No links from {mirror}, trying next...")
+                    print(f"⚠️ No links from {mirror}, trying next...")
                 
+            except asyncio.TimeoutError:
+                logger.warning(f"⏰ Timeout getting links from {mirror}, trying next...")
+                print(f"⏰ Timeout from {mirror}, trying next...")
+                continue
             except Exception as e:
-                logger.debug(f"Failed to get download links from {mirror}: {str(e)}")
+                logger.warning(f"❌ Error getting links from {mirror}: {str(e)}, trying next...")
+                print(f"❌ Error from {mirror}: {str(e)}, trying next...")
                 continue
         
-        # Add additional direct sources
+        print(f"🎯 Final result: {len(download_links)} links from {successful_mirrors} mirrors")
+        
+        logger.info(f"🎯 No links found from any mirror, trying additional sources...")
+        
+        # If no links found from mirrors, try additional sources
         additional_links = await self._get_additional_download_sources(md5_hash)
-        download_links.extend(additional_links)
+        
+        # Test additional links before adding them
+        verified_additional_links = []
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
+            for link in additional_links:
+                if await self._test_download_link(session, link['url']):
+                    verified_additional_links.append(link)
+                    logger.info(f"✅ Verified additional link: {link['name']}")
+                else:
+                    logger.info(f"❌ Additional link failed verification: {link['name']}")
+        
+        download_links.extend(verified_additional_links)
                 
         return download_links
         
@@ -511,18 +536,24 @@ class LibGenSearcher:
         """Get additional download sources for a book using various methods."""
         additional_links = []
         
-        # Add Library.lol direct links
+        # Add Library.lol direct links with multiple variants
         library_lol_links = [
             f"http://library.lol/main/{md5_hash}",
             f"https://library.lol/main/{md5_hash}",
+            f"http://libgen.lc/main/{md5_hash}",
+            f"https://libgen.lc/main/{md5_hash}",
+            f"http://libgen.lc/book/index.php?md5={md5_hash}",
+            f"https://libgen.lc/book/index.php?md5={md5_hash}",
+            f"http://libgen.lc/get.php?md5={md5_hash}",
+            f"https://libgen.lc/get.php?md5={md5_hash}",
         ]
         
-        for url in library_lol_links:
+        for i, url in enumerate(library_lol_links):
             additional_links.append({
                 'url': url,
                 'type': 'library_lol',
-                'name': 'Library.lol',
-                'text': 'Library.lol Direct'
+                'name': f'Library.lol {i+1}',
+                'text': f'Library.lol Variant {i+1}'
             })
         
         # Add Anna's Archive links (Rank #2 - Meta-search engine aggregating LibGen, Sci-Hub, Z-Library)
@@ -530,39 +561,45 @@ class LibGenSearcher:
             f"https://annas-archive.org/md5/{md5_hash}",
             f"https://annas-archive.li/md5/{md5_hash}",
             f"https://annas-archive.se/md5/{md5_hash}",
+            f"https://annas-archive.org/md5/{md5_hash}",
+            f"https://annas-archive.li/md5/{md5_hash}",
         ]
         
-        for url in annas_archive_links:
+        for i, url in enumerate(annas_archive_links):
             additional_links.append({
                 'url': url,
                 'type': 'annas_archive',
-                'name': "Anna's Archive",
+                'name': f"Anna's Archive {i+1}",
                 'text': "Meta-Search Engine"
             })
         
         # Add Z-Library links (Rank #3 - Large database, good performance)
         z_lib_links = [
             f"https://z-library.sk/md5/{md5_hash}",
+            f"https://z-lib.org/md5/{md5_hash}",
+            f"https://b-ok.org/md5/{md5_hash}",
+            f"https://booksc.eu/md5/{md5_hash}",
         ]
         
-        for url in z_lib_links:
+        for i, url in enumerate(z_lib_links):
             additional_links.append({
                 'url': url,
                 'type': 'z_library',
-                'name': 'Z-Library',
+                'name': f'Z-Library {i+1}',
                 'text': 'Comprehensive Shadow Library'
             })
         
         # Add Ocean of PDF links (Rank #4 - Clean interface, quick downloads)
         ocean_pdf_links = [
             f"https://oceanofpdf.com/?s={md5_hash}",
+            f"https://oceanofpdf.com/search/{md5_hash}",
         ]
         
-        for url in ocean_pdf_links:
+        for i, url in enumerate(ocean_pdf_links):
             additional_links.append({
                 'url': url,
                 'type': 'ocean_pdf',
-                'name': 'Ocean of PDF',
+                'name': f'Ocean of PDF {i+1}',
                 'text': 'Clean Interface'
             })
         
@@ -582,14 +619,46 @@ class LibGenSearcher:
         # Add Memory of the World links (Rank #6 - Solid fallback option)
         memory_world_links = [
             f"https://library.memoryoftheworld.org/search?q={md5_hash}",
+            f"https://library.memoryoftheworld.org/md5/{md5_hash}",
         ]
         
-        for url in memory_world_links:
+        for i, url in enumerate(memory_world_links):
             additional_links.append({
                 'url': url,
                 'type': 'memory_world',
-                'name': 'Memory of the World',
+                'name': f'Memory of the World {i+1}',
                 'text': 'Minimal Overhead'
+            })
+        
+        # Add Sci-Hub links (Rank #7 - Academic papers and books)
+        scihub_links = [
+            f"https://sci-hub.se/{md5_hash}",
+            f"https://sci-hub.st/{md5_hash}",
+            f"https://sci-hub.ru/{md5_hash}",
+        ]
+        
+        for i, url in enumerate(scihub_links):
+            additional_links.append({
+                'url': url,
+                'type': 'scihub',
+                'name': f'Sci-Hub {i+1}',
+                'text': 'Academic Papers'
+            })
+        
+        # Add direct download links (Rank #8 - Direct file access)
+        direct_links = [
+            f"https://libgen.lc/get.php?md5={md5_hash}",
+            f"http://libgen.lc/get.php?md5={md5_hash}",
+            f"https://library.lol/get.php?md5={md5_hash}",
+            f"http://library.lol/get.php?md5={md5_hash}",
+        ]
+        
+        for i, url in enumerate(direct_links):
+            additional_links.append({
+                'url': url,
+                'type': 'direct_download',
+                'name': f'Direct Download {i+1}',
+                'text': 'Direct File Access'
             })
         
         # Add direct LibGen mirror links (Updated September 2025 - comprehensive list)
@@ -629,6 +698,38 @@ class LibGenSearcher:
             })
         
         return additional_links
+    
+    async def _test_download_link(self, session: aiohttp.ClientSession, url: str, referer: str = None) -> bool:
+        """
+        Test if a download link actually resolves to a real file.
+        Returns True if the link works, False otherwise.
+        """
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            if referer:
+                headers['Referer'] = referer
+            
+            # Make a HEAD request to check if the link resolves
+            async with session.head(url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=5.0)) as response:
+                # Check if we get a successful response and it's not an error page
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    content_length = response.headers.get('Content-Length', '0')
+                    
+                    # Check if it looks like a real file (not HTML error page)
+                    if 'text/html' not in content_type and int(content_length) > 0:
+                        return True
+                    # Also accept if it's a redirect to a file
+                    elif 'application/' in content_type or 'text/plain' in content_type:
+                        return True
+                
+                return False
+                
+        except Exception as e:
+            logger.debug(f"Link test failed for {url}: {e}")
+            return False
         
     async def _get_final_download_links(self, mirror: str, md5_hash: str) -> List[Dict[str, str]]:
         """
@@ -642,18 +743,26 @@ class LibGenSearcher:
         try:
             # Step 1: Go to the ads.php redirect page
             ads_url = f"{mirror}/ads.php?md5={md5_hash}"
+            logger.info(f"🔗 Step 1: Accessing ads.php for {md5_hash} on {mirror}")
             
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
                 # Get the ads.php page (might redirect)
+                logger.info(f"🔗 Step 2: Making GET request to {ads_url}")
                 async with session.get(ads_url) as response:
+                    logger.info(f"🔗 Step 3: Got response status {response.status}")
                     if response.status != 200:
+                        logger.warning(f"🔗 Step 4: Bad response status {response.status}, returning empty")
                         return download_links
                         
+                    logger.info(f"🔗 Step 5: Reading response text...")
                     html = await response.text()
+                    logger.info(f"🔗 Step 6: Got {len(html)} characters of HTML")
                     final_url = str(response.url)  # Get final URL after redirects
                     
                     # Parse the final page for download links
+                    logger.info(f"🔗 Step 7: Parsing HTML with BeautifulSoup...")
                     soup = BeautifulSoup(html, 'html.parser')
+                    logger.info(f"🔗 Step 8: BeautifulSoup parsing complete")
                     
                     # Prefer any direct mirrors first (Cloudflare/IPFS/CDN endpoints) if present
                     direct_patterns = [
@@ -698,40 +807,96 @@ class LibGenSearcher:
                         download_links.extend(resolved_direct)
 
                     # Look for the main GET button/link (pattern: get.php?md5=hash&key=key)
+                    logger.info(f"🔗 Step 9: Looking for get.php links...")
                     get_links = soup.find_all('a', href=re.compile(r'get\.php\?md5=[a-f0-9]{32}&key=\w+'))
+                    logger.info(f"🔗 Step 10: Found {len(get_links)} get.php links")
                     
-                    for link in get_links:
+                    logger.info(f"🔗 Step 11: Processing {len(get_links)} get.php links...")
+                    for i, link in enumerate(get_links):
+                        logger.info(f"🔗 Step 11.{i+1}: Processing link {i+1}/{len(get_links)}")
                         href = link.get('href')
+                        logger.info(f"🔗 Step 11.{i+1}.1: Got href: {href}")
                         if href:
                             if href.startswith('http'):
                                 final_download_url = href
                             else:
                                 final_download_url = urljoin(final_url, href)
                             
-                            # Optionally resolve to final URL and filename
+                            # Skip URL resolution to prevent timeouts - use original URL directly
+                            logger.info(f"🔗 Step 11.{i+1}.2: Skipping URL resolution to prevent timeouts")
                             filename = None
                             resolved_url = final_download_url
                             content_type = None
-                            if self.resolve_final_urls:
-                                try:
-                                    resolution = await self._resolve_download_link(session, final_download_url, referer=final_url)
-                                    resolved_url = resolution.get('final_url') or final_download_url
-                                    filename = resolution.get('filename')
-                                    content_type = resolution.get('content_type')
-                                except Exception as _:
-                                    pass
                             
-                            link_dict: Dict[str, str] = {
-                                'url': resolved_url,
-                                'type': 'direct_download',
-                                'name': 'Direct Download',
-                                'text': link.get_text(strip=True)
-                            }
-                            if filename:
-                                link_dict['filename'] = filename
-                            if content_type:
-                                link_dict['content_type'] = content_type
-                            download_links.append(link_dict)
+                            # Create multiple link variants for better user experience
+                            base_url = final_download_url
+                            
+                            # 1. Test and add original link only if it works
+                            if await self._test_download_link(session, resolved_url, final_url):
+                                link_dict: Dict[str, str] = {
+                                    'url': resolved_url,
+                                    'type': 'direct_download',
+                                    'name': 'Direct Download',
+                                    'text': link.get_text(strip=True)
+                                }
+                                if filename:
+                                    link_dict['filename'] = filename
+                                if content_type:
+                                    link_dict['content_type'] = content_type
+                                download_links.append(link_dict)
+                                logger.info(f"✅ Verified primary link: {mirror}")
+                            else:
+                                logger.info(f"❌ Primary link failed verification: {mirror}")
+                            
+                            # 2. Create links to other mirrors for true diversity
+                            try:
+                                from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+                                parsed = urlparse(base_url)
+                                if 'get.php' in parsed.path:
+                                    # Parse existing parameters
+                                    query_params = parse_qs(parsed.query)
+                                    md5_hash = query_params.get('md5', [''])[0]
+                                    
+                                    if md5_hash:
+                                        # Create links to other mirrors for true diversity
+                                        other_mirrors = [
+                                            'https://libgen.li', 'https://libgen.gl', 'https://libgen.vg', 
+                                            'https://libgen.bz', 'https://libgen.is', 'https://libgen.pw',
+                                            'https://libgen.ee', 'http://libgen.rs', 'http://gen.lib.rus.ec',
+                                            'https://libgen.fun', 'https://libgen.st', 'http://library.lol'
+                                        ]
+                                        
+                                        # Get current mirror domain to avoid duplicates
+                                        current_domain = parsed.netloc
+                                        
+                                        # Test each mirror link before adding it
+                                        mirror_links = []
+                                        for other_mirror in other_mirrors:
+                                            if other_mirror not in mirror and other_mirror.split('://')[1] != current_domain:
+                                                # Create direct download link for other mirror
+                                                other_url = f"{other_mirror}/get.php?md5={md5_hash}&key={query_params.get('key', [''])[0]}"
+                                                
+                                                # Test if the link resolves to a real file
+                                                if await self._test_download_link(session, other_url, final_url):
+                                                    mirror_links.append({
+                                                        'url': other_url,
+                                                        'type': 'mirror_download',
+                                                        'name': f'Mirror ({other_mirror.split("://")[1]})',
+                                                        'text': f'Mirror: {other_mirror.split("://")[1]}'
+                                                    })
+                                                    logger.info(f"✅ Verified working link: {other_mirror}")
+                                                else:
+                                                    logger.info(f"❌ Link failed verification: {other_mirror}")
+                                        
+                                        # Add verified mirror links (up to 7)
+                                        download_links.extend(mirror_links[:7])
+                                        
+                                        # Limit to 8 alternatives per source for more options
+                                        if len([l for l in download_links if l['type'] == 'alternative_download']) >= 8:
+                                            break
+                            except Exception as e:
+                                logger.warning(f"Error creating alternative URLs: {e}")
+                                pass
                             
                     # Also look for alternative download links
                     alt_links = soup.find_all('a', href=re.compile(r'/file\.php\?id=\d+'))
@@ -783,7 +948,7 @@ class LibGenSearcher:
             f"{mirror}/book/index.php?md5={md5_hash}",
         ]
         
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10.0)) as session:
             for url in url_patterns:
                 try:
                     async with session.get(url) as response:
@@ -923,6 +1088,118 @@ class LibGenSearcher:
             unique_results.append(book)
             
         return unique_results
+
+    def _get_prioritized_mirrors(self) -> List[str]:
+        """
+        Get mirrors in priority order based on reliability and performance.
+        Excludes recently failed mirrors and prioritizes fast, reliable ones.
+        """
+        # Filter out recently failed mirrors (exclude for 5 minutes)
+        current_time = time.time()
+        available_mirrors = []
+        
+        for mirror in self.libgen_mirrors:
+            if mirror not in self.failed_mirrors:
+                available_mirrors.append(mirror)
+            else:
+                # Check if enough time has passed to retry this mirror
+                if current_time - self.mirror_reliability.get(mirror, {}).get('last_failure', 0) > 300:  # 5 minutes
+                    available_mirrors.append(mirror)
+                    self.failed_mirrors.discard(mirror)
+        
+        # Sort by reliability score (higher is better)
+        def reliability_score(mirror):
+            reliability_data = self.mirror_reliability.get(mirror, {})
+            success_rate = reliability_data.get('success_rate', 0.5)  # Default 50%
+            avg_response_time = self.mirror_response_times.get(mirror, 10.0)  # Default 10s
+            
+            # Calculate score: success_rate * 100 - avg_response_time
+            # Higher success rate and lower response time = better score
+            score = (success_rate * 100) - (avg_response_time * 0.1)
+            return score
+        
+        available_mirrors.sort(key=reliability_score, reverse=True)
+        
+        # If we have very few available mirrors, include some failed ones as fallback
+        if len(available_mirrors) < 3:
+            fallback_mirrors = [m for m in self.libgen_mirrors if m not in available_mirrors]
+            available_mirrors.extend(fallback_mirrors[:3])
+        
+        logger.info(f"Using {len(available_mirrors)} mirrors in priority order")
+        return available_mirrors
+
+    def _update_mirror_reliability(self, mirror: str, success: bool, response_time: float):
+        """
+        Update mirror reliability statistics for intelligent fallback.
+        
+        Args:
+            mirror: Mirror URL
+            success: Whether the request was successful
+            response_time: Response time in seconds
+        """
+        current_time = time.time()
+        
+        if mirror not in self.mirror_reliability:
+            self.mirror_reliability[mirror] = {
+                'total_requests': 0,
+                'successful_requests': 0,
+                'success_rate': 0.5,  # Start with 50% assumption
+                'last_failure': 0,
+                'last_success': current_time
+            }
+        
+        reliability_data = self.mirror_reliability[mirror]
+        reliability_data['total_requests'] += 1
+        reliability_data['last_success'] = current_time
+        
+        if success:
+            reliability_data['successful_requests'] += 1
+            # Remove from failed mirrors if it was there
+            self.failed_mirrors.discard(mirror)
+        else:
+            reliability_data['last_failure'] = current_time
+            # Add to failed mirrors
+            self.failed_mirrors.add(mirror)
+        
+        # Update success rate
+        reliability_data['success_rate'] = (
+            reliability_data['successful_requests'] / reliability_data['total_requests']
+        )
+        
+        # Update response time (exponential moving average)
+        if mirror in self.mirror_response_times:
+            self.mirror_response_times[mirror] = (
+                0.7 * self.mirror_response_times[mirror] + 0.3 * response_time
+            )
+        else:
+            self.mirror_response_times[mirror] = response_time
+
+    def _get_mirror_status(self) -> Dict[str, Any]:
+        """
+        Get current mirror status for monitoring and debugging.
+        
+        Returns:
+            Dictionary with mirror status information
+        """
+        status = {
+            'total_mirrors': len(self.libgen_mirrors),
+            'available_mirrors': len(self._get_prioritized_mirrors()),
+            'failed_mirrors': len(self.failed_mirrors),
+            'mirror_details': {}
+        }
+        
+        for mirror in self.libgen_mirrors:
+            reliability_data = self.mirror_reliability.get(mirror, {})
+            status['mirror_details'][mirror] = {
+                'success_rate': reliability_data.get('success_rate', 0.5),
+                'total_requests': reliability_data.get('total_requests', 0),
+                'avg_response_time': self.mirror_response_times.get(mirror, 0),
+                'is_failed': mirror in self.failed_mirrors,
+                'last_success': reliability_data.get('last_success', 0),
+                'last_failure': reliability_data.get('last_failure', 0)
+            }
+        
+        return status
 
 
 # Example usage and testing
